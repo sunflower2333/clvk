@@ -29,7 +29,8 @@ jobs:
           & compiler/clspv.exe --version
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           'upstream_run=34487278874; clspv_source=c20f7c8ccf58f317972ac1ffeab68a96019cbbaa; compiler_machine=AMD64; compiler_only=true' | Out-File compiler/source.txt
-          Get-ChildItem compiler -File | Get-FileHash -Algorithm SHA256 | Format-List | Out-File compiler/sha256.txt
+          $hashes = Get-ChildItem compiler -File | Get-FileHash -Algorithm SHA256
+          $hashes | Format-List | Out-File compiler/sha256.txt
       - uses: actions/upload-artifact@v4
         with:
           name: viogpu-opencl-compiler-x64
@@ -102,7 +103,8 @@ jobs:
           dumpbin /dependents build/package/OpenCL.dll | Out-File build/package/dependents.txt
           git rev-parse HEAD | Out-File build/package/source.txt
           git submodule status | Out-File -Append build/package/source.txt
-          Get-ChildItem build/package -File | Get-FileHash -Algorithm SHA256 | Format-List | Out-File build/package/sha256.txt
+          $hashes = Get-ChildItem build/package -File | Get-FileHash -Algorithm SHA256
+          $hashes | Format-List | Out-File build/package/sha256.txt
       - uses: actions/upload-artifact@v4
         if: always()
         with:
