@@ -31,6 +31,7 @@ jobs:
           'upstream_run=34487278874; clspv_source=c20f7c8ccf58f317972ac1ffeab68a96019cbbaa; compiler_machine=AMD64; compiler_only=true' | Out-File compiler/source.txt
           $hashes = Get-ChildItem compiler -File | Get-FileHash -Algorithm SHA256
           $hashes | Format-List | Out-File compiler/sha256.txt
+          $hashes | ForEach-Object { $_.Hash + '  ' + [IO.Path]::GetFileName($_.Path) } | Set-Content compiler/SHA256SUMS
       - uses: actions/upload-artifact@v4
         with:
           name: viogpu-opencl-compiler-x64

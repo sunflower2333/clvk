@@ -3,6 +3,7 @@ param(
     [Parameter(Mandatory=$true)][string]$CompilerDir,
     [Parameter(Mandatory=$true)][string]$DriverManifest,
     [Parameter(Mandatory=$true)][ValidatePattern('^[0-9A-Fa-f]{64}$')][string]$ExpectedDriverSHA256,
+    [switch]$VerifyOnly,
     [ValidateSet('arm64','x64','x86')][string]$Architecture = 'arm64',
     [ValidateRange(1,300)][int]$TimeoutSeconds = 120
 )
@@ -52,6 +53,18 @@ if ((Get-FileHash $compiler).Hash -ne '79E236AF8FEBD67FD02ADFD93F81295C87E868E9F
     throw 'Compiler identity mismatch'
 }
 Get-FileHash $compiler | Format-List
+$compilerHashes = @{}
+foreach ($line in (Get-Content (Join-Path (Split-Path $compiler) 'SHA256SUMS'))) {
+    if ($line -notmatch '^([0-9A-Fa-f]{64})  (.+)$') { throw 'Invalid compiler SHA256SUMS entry' }
+    $compilerHashes[$Matches[2]] = $Matches[1]
+}
+foreach ($dll in (Get-ChildItem (Split-Path $compiler) -Filter '*.dll' -File)) {
+    if (!$compilerHashes.ContainsKey($dll.Name) -or
+        (Get-FileHash $dll.FullName).Hash -ne $compilerHashes[$dll.Name]) {
+        throw "Compiler dependency identity mismatch: $($dll.Name)"
+    }
+}
+if ($VerifyOnly) { Write-Output 'PASS candidate hashes and ABI; GPU workload not run'; return }
 $variables = @('VK_DRIVER_FILES','VK_ICD_FILENAMES','CLVK_CLSPV_PATH','CLVK_COMPILER_TEMP_DIR','CLVK_LOG')
 $saved = @{}
 foreach ($variable in $variables) { $saved[$variable] = [Environment]::GetEnvironmentVariable($variable, 'Process') }
