@@ -24,6 +24,10 @@
 #include <unordered_map>
 #include <vector>
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 const config_struct config;
 
 namespace {
@@ -421,6 +425,31 @@ std::string print_option(config_option_type type, void* val) {
 void init_config() {
     parse_env(false);
     parse_config_file(false);
+#ifdef _WIN32
+    // A registered ICD runs in an arbitrary application's working directory.
+    // Resolve our bundled compiler from the ICD module, never that directory
+    // or PATH. Explicit user configuration continues to take precedence.
+    if (!config.clspv_path.set) {
+        HMODULE module = nullptr;
+        wchar_t path[32768];
+        if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                                   GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                               reinterpret_cast<LPCWSTR>(&init_config),
+                               &module)) {
+            DWORD length = GetModuleFileNameW(module, path, 32768);
+            if (length && length < 32768) {
+                auto compiler = std::filesystem::path(path).parent_path()
+                                    .parent_path() / "compiler" / "clspv.exe";
+                if (std::filesystem::is_regular_file(compiler)) {
+                    auto& option = const_cast<config_value<std::string>&>(
+                        config.clspv_path);
+                    option.value = compiler.string();
+                    option.set = true;
+                }
+            }
+        }
+    }
+#endif
     print_config();
 }
 

@@ -49,7 +49,7 @@ static cl_program build(cl_context context, cl_device_id device,
 int main() {
     std::setvbuf(stdout, nullptr, _IONBF, 0);
     std::printf("pointer_bits=%zu pid=%lu\n", sizeof(void*) * 8, GetCurrentProcessId());
-    const char* modules[] = {"OpenCL.dll", "vulkan-1.dll"};
+    const char* modules[] = {"OpenCL.dll"};
     for (const char* name : modules) {
         char path[MAX_PATH] = {};
         HMODULE module = GetModuleHandleA(name);
@@ -57,9 +57,8 @@ int main() {
         std::printf("module %s=%s\n", name, path);
     }
     HMODULE opencl = GetModuleHandleA("OpenCL.dll");
-    if (!GetProcAddress(opencl, "clGetPlatformIDs") ||
-        !GetProcAddress(opencl, "clIcdGetPlatformIDsKHR")) {
-        std::fprintf(stderr, "FAIL missing undecorated ICD exports\n");
+    if (!GetProcAddress(opencl, "clGetPlatformIDs")) {
+        std::fprintf(stderr, "FAIL missing loader entrypoint\n");
         return 1;
     }
     cl_uint count;
