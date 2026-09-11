@@ -425,7 +425,7 @@ std::string print_option(config_option_type type, void* val) {
 void init_config() {
     parse_env(false);
     parse_config_file(false);
-#ifdef _WIN32
+#if defined(_WIN32) && COMPILER_AVAILABLE && !CLSPV_ONLINE_COMPILER
     // A registered ICD runs in an arbitrary application's working directory.
     // Resolve our bundled compiler from the ICD module, never that directory
     // or PATH. Explicit user configuration continues to take precedence.

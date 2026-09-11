@@ -65,6 +65,14 @@ int main() {
     check(clGetPlatformIDs(0, nullptr, &count), "platform count");
     std::vector<cl_platform_id> platforms(count);
     check(clGetPlatformIDs(count, platforms.data(), nullptr), "platforms");
+    // ICD dependencies load lazily when the normal Khronos loader enumerates.
+    // Keep their absolute paths in evidence for signed-package correlation.
+    for (const char* name : {"viogpucl.dll", "vulkan-1.dll"}) {
+        HMODULE module = GetModuleHandleA(name);
+        char path[32768] = {};
+        if (module && GetModuleFileNameA(module, path, sizeof(path)))
+            std::printf("module %s=%s\n", name, path);
+    }
     cl_device_id device = nullptr;
     for (cl_platform_id platform : platforms) {
         cl_uint devices = 0;
