@@ -1132,9 +1132,9 @@ cl_int cvk_program::parse_user_spec_constants() {
         return CL_INVALID_VALUE;
     }
 
-    std::string cmd_spv{config.llvmspirv_bin()};
+    std::string cmd_spv{cvk_quote_path(config.llvmspirv_bin())};
     cmd_spv += " --spec-const-info ";
-    cmd_spv += llvmspirv_input_file;
+    cmd_spv += cvk_quote_path(llvmspirv_input_file);
 
     std::string output = "";
     cvk_exec(cmd_spv, &output);
@@ -1210,7 +1210,7 @@ cl_build_status cvk_program::do_build_inner_offline(bool build_to_ir,
     TRACE_FUNCTION("build_to_ir", build_to_ir, "build_from_il", build_from_il,
                    "build_options", TRACE_STRING(build_options.c_str()));
     // Compose clspv command-line
-    std::string cmd{config.clspv_path};
+    std::string cmd{cvk_quote_path(config.clspv_path())};
     cmd += " ";
 
     std::string clspv_input_file = append_paths(tmp_folder, "source");
@@ -1229,7 +1229,7 @@ cl_build_status cvk_program::do_build_inner_offline(bool build_to_ir,
             return CL_BUILD_ERROR;
         }
         // Compose llvm-spirv command-line
-        std::string cmd_spv{config.llvmspirv_bin};
+        std::string cmd_spv{cvk_quote_path(config.llvmspirv_bin())};
 
         if (!m_user_spec_constants.empty()) {
             std::string spec_constant_flag = " --spec-const=";
@@ -1277,9 +1277,9 @@ cl_build_status cvk_program::do_build_inner_offline(bool build_to_ir,
 
         cmd_spv += " -r ";
         cmd_spv += " -o ";
-        cmd_spv += clspv_input_file;
+        cmd_spv += cvk_quote_path(clspv_input_file);
         cmd_spv += " ";
-        cmd_spv += llvmspirv_input_file;
+        cmd_spv += cvk_quote_path(llvmspirv_input_file);
 
         // Call the translator
         int status = cvk_exec(cmd_spv);
@@ -1289,7 +1289,7 @@ cl_build_status cvk_program::do_build_inner_offline(bool build_to_ir,
             return CL_BUILD_ERROR;
         }
 
-        cmd += clspv_input_file;
+        cmd += cvk_quote_path(clspv_input_file);
         cmd += " ";
 #endif // ENABLE_SPIRV_IL
     } else if (m_operation == build_operation::link) {
@@ -1307,7 +1307,7 @@ cl_build_status cvk_program::do_build_inner_offline(bool build_to_ir,
                 cvk_error_fn("Couldn't save source to file!");
                 return CL_BUILD_ERROR;
             }
-            cmd += input_file;
+            cmd += cvk_quote_path(input_file);
             cmd += " ";
         }
     } else {
@@ -1317,7 +1317,7 @@ cl_build_status cvk_program::do_build_inner_offline(bool build_to_ir,
                 cvk_error_fn("Couldn't save source to file!");
                 return CL_BUILD_ERROR;
             }
-            cmd += clspv_input_file;
+            cmd += cvk_quote_path(clspv_input_file);
             cmd += " ";
         } else {
             clspv_input_file += ".cl";
@@ -1325,7 +1325,7 @@ cl_build_status cvk_program::do_build_inner_offline(bool build_to_ir,
                 cvk_error_fn("Couldn't save source to file!");
                 return CL_BUILD_ERROR;
             }
-            cmd += clspv_input_file;
+            cmd += cvk_quote_path(clspv_input_file);
             cmd += " ";
         }
     }
@@ -1339,7 +1339,7 @@ cl_build_status cvk_program::do_build_inner_offline(bool build_to_ir,
 
     cmd += build_options;
     cmd += " -o ";
-    cmd += clspv_output_file;
+    cmd += cvk_quote_path(clspv_output_file);
 
     // Call clspv
     int status = cvk_exec(cmd, &m_build_log);
@@ -1554,7 +1554,7 @@ cl_build_status cvk_program::do_build_inner(const cvk_device* device) {
 #else
     // Save headers
     if (m_operation == build_operation::compile) {
-        build_options += "-I" + tmp_folder;
+        build_options += "-I" + cvk_quote_path(tmp_folder);
         for (cl_uint i = 0; i < m_num_input_programs; i++) {
             auto fname = append_paths(tmp_folder, m_header_include_names[i]);
             if (!save_string_to_file(fname, m_input_programs[i]->source())) {

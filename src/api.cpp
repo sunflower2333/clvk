@@ -6139,7 +6139,7 @@ cl_semaphore_khr cvk_create_semaphore_with_properties_khr(
     return sem.release();
 }
 
-cl_semaphore_khr clCreateSemaphoreWithPropertiesKHR(
+cl_semaphore_khr CLVK_API_CALL clCreateSemaphoreWithPropertiesKHR(
     cl_context context, const cl_semaphore_properties_khr* sema_props,
     cl_int* errcode_ret) {
 
@@ -6159,7 +6159,7 @@ cl_semaphore_khr clCreateSemaphoreWithPropertiesKHR(
     return sem;
 }
 
-cl_int
+cl_int CLVK_API_CALL
 clEnqueueWaitSemaphoresKHR(cl_command_queue command_queue,
                            cl_uint num_sema_objects,
                            const cl_semaphore_khr* sema_objects,
@@ -6218,7 +6218,7 @@ clEnqueueWaitSemaphoresKHR(cl_command_queue command_queue,
     return CL_INVALID_OPERATION;
 }
 
-cl_int
+cl_int CLVK_API_CALL
 clEnqueueSignalSemaphoresKHR(cl_command_queue command_queue,
                              cl_uint num_sema_objects,
                              const cl_semaphore_khr* sema_objects,
@@ -6277,7 +6277,7 @@ clEnqueueSignalSemaphoresKHR(cl_command_queue command_queue,
     return CL_INVALID_OPERATION;
 }
 
-cl_int clGetSemaphoreInfoKHR(const cl_semaphore_khr sema_object,
+cl_int CLVK_API_CALL clGetSemaphoreInfoKHR(const cl_semaphore_khr sema_object,
                              cl_semaphore_info_khr param_name,
                              size_t param_value_size, void* param_value,
                              size_t* param_value_size_ret) {
@@ -6349,7 +6349,7 @@ cl_int clGetSemaphoreInfoKHR(const cl_semaphore_khr sema_object,
     return ret;
 }
 
-cl_int clReleaseSemaphoreKHR(cl_semaphore_khr sema_object) {
+cl_int CLVK_API_CALL clReleaseSemaphoreKHR(cl_semaphore_khr sema_object) {
     TRACE_FUNCTION("sema_object", (uintptr_t)sema_object);
     LOG_API_CALL("sema_object = %p", sema_object);
 
@@ -6362,7 +6362,7 @@ cl_int clReleaseSemaphoreKHR(cl_semaphore_khr sema_object) {
     return CL_SUCCESS;
 }
 
-cl_int clRetainSemaphoreKHR(cl_semaphore_khr sema_object) {
+cl_int CLVK_API_CALL clRetainSemaphoreKHR(cl_semaphore_khr sema_object) {
     TRACE_FUNCTION("sema_object", (uintptr_t)sema_object);
     LOG_API_CALL("sema_object = %p", sema_object);
 
