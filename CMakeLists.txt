@@ -57,6 +57,11 @@ endif()
 
 # Options
 option(CLVK_CLSPV_ONLINE_COMPILER "Use the Clspv C++ API for compilation of kernels")
+option(CLVK_EXTERNAL_CLSPV "Use an independently packaged clspv executable" OFF)
+set(CLVK_EXTERNAL_CLSPV_PATH "clspv.exe" CACHE STRING "Default external clspv executable")
+if (CLVK_EXTERNAL_CLSPV AND CLVK_CLSPV_ONLINE_COMPILER)
+  message(FATAL_ERROR "External clspv cannot be linked as an online compiler")
+endif()
 
 option(CLVK_COMPILER_AVAILABLE "Enable compiler support" ON)
 if (NOT CLVK_COMPILER_AVAILABLE AND CLVK_CLSPV_ONLINE_COMPILER)
@@ -125,12 +130,17 @@ endif()
 set(CLSPV_SOURCE_DIR ${PROJECT_SOURCE_DIR}/external/clspv
     CACHE STRING "Clspv source directory")
 set(CLSPV_BUILD_SPIRV_DIS OFF)
+if (NOT CLVK_EXTERNAL_CLSPV)
 add_subdirectory(${CLSPV_SOURCE_DIR} ${PROJECT_BINARY_DIR}/external/clspv
                  EXCLUDE_FROM_ALL)
 set_target_properties(clspv PROPERTIES RUNTIME_OUTPUT_DIRECTORY
                       ${CMAKE_BINARY_DIR})
+endif()
 
 option(CLVK_ENABLE_SPIRV_IL "Enable SPIR-V as an intermediate language" ON)
+if (CLVK_EXTERNAL_CLSPV AND CLVK_ENABLE_SPIRV_IL)
+  message(FATAL_ERROR "External clspv currently requires CLVK_ENABLE_SPIRV_IL=OFF; OpenCL C source compilation remains available")
+endif()
 # SPIRV-LLVM-Translator
 if (CLVK_COMPILER_AVAILABLE AND CLVK_ENABLE_SPIRV_IL)
   set(LLVM_DIR

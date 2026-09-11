@@ -171,9 +171,14 @@ if (CLVK_CLSPV_ONLINE_COMPILER)
   endif()
 else()
   if (CLVK_COMPILER_AVAILABLE)
+    if (CLVK_EXTERNAL_CLSPV)
+      target_compile_definitions(clvk-config-definitions INTERFACE
+        DEFAULT_CLSPV_BINARY_PATH="${CLVK_EXTERNAL_CLSPV_PATH}")
+    else()
     add_dependencies(OpenCL-objects clspv)
     target_compile_definitions(clvk-config-definitions INTERFACE
       DEFAULT_CLSPV_BINARY_PATH="$<TARGET_FILE:clspv>")
+    endif()
   endif()
 endif()
 
@@ -232,6 +237,6 @@ else()
 endif()
 # Basic install rules
 install(TARGETS OpenCL DESTINATION .)
-if (NOT CLVK_CLSPV_ONLINE_COMPILER AND CLVK_COMPILER_AVAILABLE)
+if (NOT CLVK_CLSPV_ONLINE_COMPILER AND CLVK_COMPILER_AVAILABLE AND NOT CLVK_EXTERNAL_CLSPV)
   install(TARGETS clspv DESTINATION .)
 endif()
