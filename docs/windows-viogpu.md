@@ -21,7 +21,10 @@ claim is made by a successful build or by the bounded verification probe.
 `tools/run-viogpu-opencl.ps1` checks PE machine types and compiler identity, prints
 binary hashes, selects the supplied ICD only for the child process, and runs a
 120-second bounded probe. Supply `-RuntimeDir`, `-CompilerDir`,
-`-DriverManifest`, and `-Architecture`. It does not register an ICD globally or
+`-DriverManifest`, `-ExpectedDriverSHA256`, and `-Architecture`. Runtime files
+are checked against the candidate SHA256SUMS. Every run uses a fresh log
+directory; timeout stops only the launched probe process tree, including its
+external compiler. It does not register an ICD globally or
 install a display driver. Coordinate the VM GPU test window before invoking it.
 
 The probe checks undecorated ICD exports, requires an Adreno/Turnip GPU, verifies

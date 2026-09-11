@@ -2,8 +2,9 @@ param(
     [Parameter(Mandatory=$true)][string]$RuntimeDir,
     [Parameter(Mandatory=$true)][string]$CompilerDir,
     [Parameter(Mandatory=$true)][string]$DriverManifest,
+    [Parameter(Mandatory=$true)][ValidatePattern('^[0-9A-Fa-f]{64}$')][string]$ExpectedDriverSHA256,
     [ValidateSet('arm64','x64','x86')][string]$Architecture = 'arm64',
-    [int]$TimeoutSeconds = 120
+    [ValidateRange(1,300)][int]$TimeoutSeconds = 120
 )
 $ErrorActionPreference = 'Stop'
 $runtime = (Resolve-Path $RuntimeDir).Path
@@ -14,6 +15,12 @@ $icd = $json.ICD.library_path
 if (![IO.Path]::IsPathRooted($icd)) { $icd = Join-Path (Split-Path $manifest) $icd }
 $icd = (Resolve-Path $icd).Path
 $expectedMachine = @{arm64=0xAA64; x64=0x8664; x86=0x14C}[$Architecture]
+$expectedHashes = @{}
+foreach ($line in (Get-Content (Join-Path $runtime 'SHA256SUMS'))) {
+    if ($line -notmatch '^([0-9A-Fa-f]{64})  (.+)$') { throw 'Invalid SHA256SUMS entry' }
+    if ($expectedHashes.ContainsKey($Matches[2])) { throw 'Duplicate SHA256SUMS entry' }
+    $expectedHashes[$Matches[2]] = $Matches[1]
+}
 function Get-Machine([string]$Path) {
     $stream = [IO.File]::OpenRead($Path)
     try {
@@ -30,7 +37,16 @@ $binaries = @((Join-Path $runtime 'OpenCL.dll'), (Join-Path $runtime 'vulkan-1.d
 foreach ($binary in $binaries) {
     $machine = Get-Machine $binary
     if ($machine -ne $expectedMachine) { throw "ABI mismatch: $binary machine=$machine" }
-    Get-FileHash $binary -Algorithm SHA256 | Format-List
+    $hash = Get-FileHash $binary -Algorithm SHA256
+    $expected = if ($binary -eq $icd) { $ExpectedDriverSHA256 } else { $expectedHashes[[IO.Path]::GetFileName($binary)] }
+    if (!$expected -or $hash.Hash -ne $expected) { throw "Binary identity mismatch: $binary" }
+    $hash | Format-List
+}
+foreach ($dll in (Get-ChildItem $runtime -Filter '*.dll' -File)) {
+    if (!$expectedHashes.ContainsKey($dll.Name) -or
+        (Get-FileHash $dll.FullName).Hash -ne $expectedHashes[$dll.Name]) {
+        throw "Dependency identity mismatch: $($dll.Name)"
+    }
 }
 if ((Get-FileHash $compiler).Hash -ne '79E236AF8FEBD67FD02ADFD93F81295C87E868E9FD861F71D03D1057E6BE1F9D') {
     throw 'Compiler identity mismatch'
@@ -44,14 +60,21 @@ try {
     $env:VK_ICD_FILENAMES = $manifest
     $env:CLVK_CLSPV_PATH = $compiler
     # Deliberate spaces exercise compiler path quoting, inside the candidate only.
-    $env:CLVK_COMPILER_TEMP_DIR = Join-Path $runtime 'compiler temporary files'
+    $runName = (Get-Date -Format 'yyyyMMdd-HHmmss-fff') + '-' + [Guid]::NewGuid().ToString('N')
+    $runDir = Join-Path (Join-Path $runtime 'runs') $runName
+    New-Item -ItemType Directory $runDir | Out-Null
+    Write-Output "RunDirectory=$runDir"
+    $env:CLVK_COMPILER_TEMP_DIR = Join-Path $runDir 'compiler temporary files'
     New-Item -ItemType Directory -Force $env:CLVK_COMPILER_TEMP_DIR | Out-Null
     $env:CLVK_LOG = '3'
-    $stdout = Join-Path $runtime 'opencl-check.stdout.txt'
-    $stderr = Join-Path $runtime 'opencl-check.stderr.txt'
+    $stdout = Join-Path $runDir 'opencl-check.stdout.txt'
+    $stderr = Join-Path $runDir 'opencl-check.stderr.txt'
     $process = Start-Process (Join-Path $runtime 'viogpu-opencl-check.exe') -WorkingDirectory $runtime -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
     if (!$process.WaitForExit($TimeoutSeconds * 1000)) {
-        $process.Kill()
+        # Only this freshly launched probe and its compiler descendants.
+        & taskkill.exe /PID $process.Id /T /F
+        if ($LASTEXITCODE -ne 0 -and !$process.HasExited) { throw 'Failed to stop owned probe process tree' }
+        $process.WaitForExit()
         throw "OpenCL probe timed out after $TimeoutSeconds seconds"
     }
     $process.Refresh()

@@ -105,6 +105,7 @@ jobs:
           git submodule status | Out-File -Append build/package/source.txt
           $hashes = Get-ChildItem build/package -File | Get-FileHash -Algorithm SHA256
           $hashes | Format-List | Out-File build/package/sha256.txt
+          $hashes | ForEach-Object { $_.Hash + '  ' + [IO.Path]::GetFileName($_.Path) } | Set-Content build/package/SHA256SUMS
       - uses: actions/upload-artifact@v4
         if: always()
         with:
