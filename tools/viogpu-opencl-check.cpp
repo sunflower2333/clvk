@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <vector>
+#include <chrono>
 
 static void check(cl_int status, const char* operation) {
     if (status != CL_SUCCESS) {
@@ -20,7 +21,11 @@ static cl_program build(cl_context context, cl_device_id device,
     cl_int status;
     cl_program program = clCreateProgramWithSource(context, 1, &source, nullptr, &status);
     check(status, "clCreateProgramWithSource");
+    auto started = std::chrono::steady_clock::now();
     status = clBuildProgram(program, 1, &device, "-cl-std=CL1.2", nullptr, nullptr);
+    auto duration = std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::steady_clock::now() - started).count();
+    std::printf("compiler_wall_us=%lld expected_failure=%u\n", duration, unsigned(expect_failure));
     size_t length = 0;
     clGetProgramBuildInfo(program, device, CL_PROGRAM_BUILD_LOG, 0, nullptr, &length);
     std::vector<char> log(length + 1);
@@ -143,7 +148,9 @@ int main() {
                 if (execution != CL_COMPLETE) return 1;
                 check(clReleaseEvent(event), "event release");
             }
-            std::printf("verified mode=%u iteration=%u elements=%zu GPU_ns=%llu\n", mode, iteration, n, end - start);
+            // OpenCL profiling may use host monotonic time when the Vulkan
+            // driver lacks calibrated timestamps; this is not GPU-only time.
+            std::printf("verified mode=%u iteration=%u elements=%zu event_ns=%llu\n", mode, iteration, n, end - start);
         }
         check(clFinish(queue), "finish");
         check(clReleaseCommandQueue(queue), "release queue");

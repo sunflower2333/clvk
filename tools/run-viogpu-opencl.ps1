@@ -82,7 +82,12 @@ try {
     $env:CLVK_LOG = '3'
     $stdout = Join-Path $runDir 'opencl-check.stdout.txt'
     $stderr = Join-Path $runDir 'opencl-check.stderr.txt'
+    $startedUtc = [DateTime]::UtcNow.ToString('o')
+    $elapsed = [Diagnostics.Stopwatch]::StartNew()
     $process = Start-Process (Join-Path $runtime 'viogpu-opencl-check.exe') -WorkingDirectory $runtime -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+    # Cache the native handle while alive; Windows PowerShell otherwise loses
+    # ExitCode when its Start-Process object notices the child has already exited.
+    $null = $process.Handle
     if (!$process.WaitForExit($TimeoutSeconds * 1000)) {
         # Only this freshly launched probe and its compiler descendants.
         & taskkill.exe /PID $process.Id /T /F
@@ -91,9 +96,15 @@ try {
         throw "OpenCL probe timed out after $TimeoutSeconds seconds"
     }
     $process.Refresh()
+    $elapsed.Stop()
+    $exitCode = $process.ExitCode
+    [PSCustomObject]@{StartedUtc=$startedUtc; FinishedUtc=[DateTime]::UtcNow.ToString('o');
+        ProcessId=$process.Id; ElapsedMilliseconds=$elapsed.ElapsedMilliseconds;
+        ExitCode=$exitCode; Architecture=$Architecture} |
+        ConvertTo-Json | Set-Content (Join-Path $runDir 'result.json')
     Get-Content $stdout
     Get-Content $stderr
-    if ($process.ExitCode -ne 0) { throw "OpenCL probe exit=$($process.ExitCode)" }
+    if ($null -eq $exitCode -or $exitCode -ne 0) { throw "OpenCL probe exit=$exitCode" }
     if (!(Select-String -Path $stdout -SimpleMatch 'PASS GPU kernel + copy + readback + events + compiler error propagation')) {
         throw 'Probe did not emit GPU verification PASS'
     }
