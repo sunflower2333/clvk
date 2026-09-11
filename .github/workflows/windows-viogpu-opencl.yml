@@ -5,7 +5,36 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+  actions: read
 jobs:
+  compiler:
+    runs-on: windows-2022
+    steps:
+      - uses: ilammy/msvc-dev-cmd@v1
+      - name: Package matching upstream compiler
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh run download 34487278874 -R kpet/clvk -n clvk-windows-2022---compiler-true-online-false -D upstream
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $exe = Get-Item upstream/clspv.exe
+          $expected = '79E236AF8FEBD67FD02ADFD93F81295C87E868E9FD861F71D03D1057E6BE1F9D'
+          if ((Get-FileHash $exe.FullName -Algorithm SHA256).Hash -ne $expected) { throw 'Compiler identity mismatch' }
+          New-Item -Type Directory -Force compiler | Out-Null
+          Copy-Item $exe.FullName compiler/
+          $crt = Get-ChildItem "$env:VCToolsRedistDir/x64" -Directory -Filter 'Microsoft.VC*.CRT' | Select-Object -First 1
+          if (!$crt) { throw 'Missing x64 compiler CRT' }
+          Copy-Item "$($crt.FullName)/*.dll" compiler/
+          & compiler/clspv.exe --version
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          'upstream_run=34487278874; clspv_source=c20f7c8ccf58f317972ac1ffeab68a96019cbbaa; compiler_machine=AMD64; compiler_only=true' | Out-File compiler/source.txt
+          Get-ChildItem compiler -File | Get-FileHash -Algorithm SHA256 | Format-List | Out-File compiler/sha256.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: viogpu-opencl-compiler-x64
+          path: compiler/
+          if-no-files-found: error
   build:
     runs-on: windows-2022
     strategy:
@@ -57,6 +86,9 @@ jobs:
           cmake --install build/runtime --prefix build/package
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           Copy-Item "$prefix/bin/vulkan-1.dll" build/package/
+          $crt = Get-ChildItem "$env:VCToolsRedistDir/${{ matrix.arch }}" -Directory -Filter 'Microsoft.VC*.CRT' | Select-Object -First 1
+          if (!$crt) { throw 'Missing runtime CRT' }
+          Copy-Item "$($crt.FullName)/*.dll" build/package/
           cl /nologo /EHsc /std:c++17 /MD /DWIN32 /DNOMINMAX /Isrc /Iexternal/OpenCL-Headers /Iexternal/SPIRV-Headers/include "/I$prefix/include" src/utils.cpp tools/windows-exec-check.cpp /Febuild/package/windows-exec-check.exe
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           if ('${{ matrix.arch }}' -ne 'arm64') {
