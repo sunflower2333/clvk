@@ -80,3 +80,33 @@ in loader logs. Run opencl-x86-instance-interactive-01, PID4668,
 UTC08:19:04.1971041Z, elapsed8398ms, Exit0; no physical-device enumeration,
 device creation or submissions were performed. No global registration or
 loader-security change is necessary for this app-local launch path.
+
+The next actual I386 run used runtime source0506ac3, CI34577372051 (all four
+jobs passed), and the same Turnip4ace ICD. OpenCL SHA256
+FAF744A83FEDE22641FFA27FA7D1960813D8A01FA1C34211B33C963AB4154222;
+probe B5A17FD4779ED44DEBB16531DF7E350610547F806FF1CA6265B153AF6ADBDEDE;
+loader79DD4A2D463965481F1FE72511612841C02B380358E891542934E719E84D1BD3.
+Console run opencl-x86-0506ac3-01 completed Exit0; child pointer_bits32/PID7908
+ran UTC08:23:05.8048617Z through08:23:11.6351084Z, elapsed5790ms, ExitCode0.
+Directory x86/package/runs/20260911-012305-794-6f1538173d0549caa109b3ee33448978
+under the separate opencl-0506ac3 candidate contains exact module paths,
+Adreno830/Qualcomm identity and explicit PASS for eight4096-element kernels,
+copies, complete readback and events. Invalid source returned -11 in1444314us;
+valid build returned0 in331140us. Event intervals use host monotonic fallback,
+not GPU hardware timing. Out-of-order remains unsupported and unclaimed.
+Parent host capture is named opencl-x86-0d8e573-02 for historical reasons;
+the actual tested runtime is0506ac3. Parent matched host trace11391lines with
+zero loss, CLcontext41:2 submissions8/retirements8, no fault/dmesg delta.
+Postdesktop Explorer passed3/3 rounds with the same DWM576/Explorer4400.
+New Application record108434 was Edge Information event256 at local01:22:31,
+before this OpenCL run: extension garbage collection completed, not an error.
+
+Actual AMD64 runtime0506ac3 is staged and remote preflight passed, not yet run:
+OpenCL921627B6388849124BAD1B8327ED7336B2FF4CA67F8A6B588D25E3F50E4C33C0;
+probe88BA7E3DCFC39FCA0593534B1C477AE7A21F4D4038E5BBA4E5B132A3036EACC2;
+loader58B802C59057CA7264184A4348F86AABE3211B9B527C1FB7E3FFB7DDF44CBA57.
+Turnip build73834ddda30 (runtime baseline4ace), CI34576200645, is actual8664:
+ICDB5A2E4715CE3B309EF876ECF3EF7A9D06A8174D245454665EC0725050667F370;
+zlibC148477D0DB3A84EDD7B095F3C2F1D59D70B43E753E281DD8E18F661F7D8632B.
+All runtime/compiler dependency hashes and architecture gates passed. No
+system-wide OpenCL ICD registration or general conformance claim is made.

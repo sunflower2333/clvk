@@ -65,12 +65,17 @@ foreach ($dll in (Get-ChildItem (Split-Path $compiler) -Filter '*.dll' -File)) {
     }
 }
 if ($VerifyOnly) { Write-Output 'PASS candidate hashes and ABI; GPU workload not run'; return }
-$variables = @('VK_DRIVER_FILES','VK_ICD_FILENAMES','CLVK_CLSPV_PATH','CLVK_COMPILER_TEMP_DIR','CLVK_LOG')
+$principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
+if ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    throw 'Elevated Vulkan loader ignores ICD overrides; use run-viogpu-opencl-interactive.ps1'
+}
+$variables = @('VK_DRIVER_FILES','VK_ICD_FILENAMES','CLVK_CLSPV_PATH','CLVK_COMPILER_TEMP_DIR','CLVK_LOG','PATH')
 $saved = @{}
 foreach ($variable in $variables) { $saved[$variable] = [Environment]::GetEnvironmentVariable($variable, 'Process') }
 try {
     $env:VK_DRIVER_FILES = $manifest
     $env:VK_ICD_FILENAMES = $manifest
+    $env:PATH = (Split-Path $icd) + ';' + $env:PATH
     $env:CLVK_CLSPV_PATH = $compiler
     # Deliberate spaces exercise compiler path quoting, inside the candidate only.
     $runName = (Get-Date -Format 'yyyyMMdd-HHmmss-fff') + '-' + [Guid]::NewGuid().ToString('N')

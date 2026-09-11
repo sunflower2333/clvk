@@ -27,10 +27,29 @@ directory; timeout stops only the launched probe process tree, including its
 external compiler. It does not register an ICD globally or
 install a display driver. Coordinate the VM GPU test window before invoking it.
 
+Run this script from a non-elevated desktop PowerShell session. Elevated Vulkan
+loaders deliberately ignore ICD environment overrides; the launcher rejects
+that case before starting the probe. The ICD directory is added to the child
+PATH so matching dependencies such as zlib resolve correctly. `-VerifyOnly`
+performs the hash and architecture checks without starting any workload and may
+be used over elevated SSH.
+
+On the validation VM, `tools/run-viogpu-opencl-interactive.ps1` uses the existing
+`C:\Users\Public\run-viogpu-console.ps1` scheduled-task mechanism to start the
+same bounded launcher in the logged-in desktop session. Supply the same
+arguments and a unique `-RunId`; this helper returns after scheduling, so use
+the console helper's `-Action Status -RunId ...` to inspect completion. It
+requires that existing console helper and does not install it. The console
+result describes the ARM64 PowerShell wrapper; the nested runtime `result.json`
+and probe `pointer_bits` describe the actual x86/x64/ARM64 OpenCL process.
+
 The probe checks undecorated ICD exports, requires an Adreno/Turnip GPU, verifies
 invalid compiler input fails, and validates every element after repeated kernel
 execution, GPU buffer copies and CPU readback. It verifies event completion and
-GPU profiling order, and exercises out-of-order queues only if advertised.
+profiling timestamp order, and exercises out-of-order queues only if advertised.
+`event_ns` may use host monotonic timestamps when device timestamp support is
+unavailable; it is not a hardware GPU busy-time measurement. Compiler wall time
+is reported separately for expected-failure and successful builds.
 Runtime acceptance additionally requires matched host GPU and guest driver
 evidence with no TDR, corruption, hang or device loss.
 
