@@ -293,6 +293,13 @@ std::unique_ptr<cvk_device_properties> create_cvk_device_properties(
         RETURN(cvk_device_properties_adreno_630);
     } else if (strcmp(name, "Adreno (TM) 640") == 0) {
         RETURN(cvk_device_properties_adreno_640);
+    } else if (vendorID == 0x5143) {
+        // Turnip includes additional information in newer Adreno device names.
+        // The Vulkan vendor ID identifies Qualcomm without guessing cache size
+        // or compute-unit counts from a name or another GPU generation.
+        cvk_warn("Adreno device '%s' has no specific hardware property table; "
+                 "using conservative defaults", name);
+        RETURN(cvk_device_properties_adreno);
     } else if (isIntelDevice(name, vendorID)) {
         RETURN(cvk_device_properties_intel);
     } else if (isAMDDevice(name, vendorID)) {
