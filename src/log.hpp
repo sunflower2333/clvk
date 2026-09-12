@@ -48,6 +48,7 @@ enum loggroup : uint64_t
 
 void init_logging();
 void term_logging();
+void cvk_log_flush();
 void cvk_log(uint64_t group_mask, loglevel level, const char* fmt, ...)
     CHECK_PRINTF(3, 4);
 bool cvk_log_level_enabled(loglevel level);

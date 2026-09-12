@@ -1,12 +1,24 @@
 name: Windows VIOGPU OpenCL
 on:
   push:
-    branches: [viogpu-windows-opencl, work/flat-runtime-20260912]
+    branches: [viogpu-windows-opencl, work/flat-runtime-20260912, work/flat-duration-dispatch-20260913]
   workflow_dispatch:
 permissions:
   contents: read
   actions: read
 jobs:
+  diagnostic:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - name: Check production bounded recorder and duration admission
+        run: |
+          clang++ -std=c++17 -g -O1 -Wall -Wextra -Werror -fsanitize=address,undefined -pthread tools/dispatch-trace-check.cpp -o dispatch-trace-check
+          ./dispatch-trace-check
+          clang++ -std=c++17 -g -O1 -Wall -Wextra -Werror -fsanitize=address,undefined -pthread tools/batch-duration-check.cpp -o batch-duration-check
+          ./batch-duration-check
   compiler:
     runs-on: windows-2022
     steps:
@@ -107,6 +119,14 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           cl /nologo /EHsc /std:c++17 /MT /DWIN32 /DNOMINMAX /Isrc /Iexternal/OpenCL-Headers /Iexternal/SPIRV-Headers/include "/I$prefix/include" src/utils.cpp tools/windows-flat-check.cpp /Febuild/package/windows-flat-check-${{ matrix.arch }}.exe /link /MANIFEST:EMBED "/MANIFESTUAC:level='asInvoker' uiAccess='false'"
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cl /nologo /EHsc /std:c++17 /MT /DWIN32 /DNOMINMAX tools/dispatch-trace-check.cpp /Febuild/package/dispatch-trace-check-${{ matrix.arch }}.exe /link /MANIFEST:EMBED "/MANIFESTUAC:level='asInvoker' uiAccess='false'"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cl /nologo /EHsc /std:c++17 /MT /DWIN32 /DNOMINMAX tools/batch-duration-check.cpp /Febuild/package/batch-duration-check-${{ matrix.arch }}.exe /link /MANIFEST:EMBED "/MANIFESTUAC:level='asInvoker' uiAccess='false'"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          # This is an explicit vendor-candidate control with sibling ICD DLLs.
+          # Ordinary system-loader application probes are built by the parent.
+          cl /nologo /EHsc /std:c++17 /MT /DWIN32 /DNOMINMAX /Iexternal/OpenCL-Headers tools/viogpu-opencl-dispatch-check.cpp /Febuild/package/viogpu-opencl-dispatch-check-${{ matrix.arch }}.exe /link "build/runtime/src/$vendor.lib" /MANIFEST:EMBED "/MANIFESTUAC:level='asInvoker' uiAccess='false'"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
           python tools/flat-pe.py --output build/package --arch '${{ matrix.arch }}'
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           if ('${{ matrix.arch }}' -ne 'arm64') {
@@ -117,6 +137,12 @@ jobs:
             $flat = (Resolve-Path build/flat).Path
             & build/package/windows-flat-check-${{ matrix.arch }}.exe "$flat/$vendor.dll" "$privateVk.dll"
             if ($LASTEXITCODE) { throw 'Flat runtime/compiler test failed' }
+            & build/package/dispatch-trace-check-${{ matrix.arch }}.exe
+            if ($LASTEXITCODE) { throw 'Production recorder failed' }
+            & build/package/batch-duration-check-${{ matrix.arch }}.exe
+            if ($LASTEXITCODE) { throw 'Production duration admission failed' }
+            & build/package/viogpu-opencl-dispatch-check-${{ matrix.arch }}.exe --help
+            if ($LASTEXITCODE) { throw 'Vendor dispatch control CLI failed' }
           }
           dumpbin /headers "build/package/$vendor.dll" "build/package/$privateVk.dll" | Out-File build/package/pe-headers.txt
           dumpbin /exports "build/package/$vendor.dll" | Out-File build/package/exports.txt
@@ -124,6 +150,7 @@ jobs:
           git rev-parse HEAD | Out-File build/package/source.txt
           git submodule status | Out-File -Append build/package/source.txt
           $hashes = Get-ChildItem build/package -File | Get-FileHash -Algorithm SHA256
+          $hashes | Where-Object { $_.Path -match '(?i)\.(dll|exe)$' } | ForEach-Object { Write-Output ("PAYLOAD_SHA256 {0} {1}" -f [IO.Path]::GetFileName($_.Path), $_.Hash) }
           $hashes | Format-List | Out-File build/package/sha256.txt
           $hashes | ForEach-Object { $_.Hash + '  ' + [IO.Path]::GetFileName($_.Path) } | Set-Content build/package/SHA256SUMS
       - uses: actions/upload-artifact@v4
@@ -151,6 +178,14 @@ jobs:
           Copy-Item artifacts/viogpu-opencl-compiler-x64/*.dll $flat -ErrorAction SilentlyContinue
           Copy-Item artifacts/viogpu-opencl-compiler-x64/*.exe $flat
           foreach ($arch in @('arm64','x64','x86')) {
+            $source = Get-Content "artifacts/viogpu-opencl-$arch/package/source.txt" -First 1
+            if ($source.Trim() -ne $env:GITHUB_SHA) { throw "Wrong $arch runtime source" }
             & "artifacts/viogpu-opencl-$arch/package/windows-flat-check-$arch.exe" "$($flat.FullName)/viogpucl_$arch.dll" "viogpucl_vk_$arch.dll"
             if ($LASTEXITCODE) { throw "Native/emulated flat $arch runtime/compiler failed" }
+            & "artifacts/viogpu-opencl-$arch/package/dispatch-trace-check-$arch.exe"
+            if ($LASTEXITCODE) { throw "Native/emulated $arch production recorder failed" }
+            & "artifacts/viogpu-opencl-$arch/package/batch-duration-check-$arch.exe"
+            if ($LASTEXITCODE) { throw "Native/emulated $arch production duration admission failed" }
+            & "artifacts/viogpu-opencl-$arch/package/viogpu-opencl-dispatch-check-$arch.exe" --help
+            if ($LASTEXITCODE) { throw "Native/emulated $arch vendor control CLI failed" }
           }

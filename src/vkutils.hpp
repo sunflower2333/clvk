@@ -106,6 +106,7 @@ struct cvk_vulkan_queue_wrapper {
     }
 
     uint32_t queue_family() { return m_queue_family; }
+    VkQueue handle() const { return m_queue; }
 
 private:
     std::mutex m_lock;

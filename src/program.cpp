@@ -1370,6 +1370,12 @@ cl_build_status cvk_program::do_build_inner_offline(bool build_to_ir,
              build_to_ir ? "IR" : "SPIR-V", clspv_output_file.c_str(),
              build_to_ir ? m_ir.size() : m_binary.code().size(),
              build_to_ir ? "bytes" : "words");
+    if (config.dispatch_trace) {
+        cvk_info("DISPATCH_PROGRAM program=%p binary=\"%s\" input=\"%s\" build_options=\"%s\"",
+                 (void*)this, clspv_output_file.c_str(), clspv_input_file.c_str(),
+                 build_options.c_str());
+        cvk_log_flush();
+    }
 
     return CL_BUILD_SUCCESS;
 }
