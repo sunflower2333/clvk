@@ -51,5 +51,13 @@ try {
     'PASS six original-name executable launches: standard user, non-elevated, medium-or-lower integrity, correct manifests and architecture; no GPU execution'
 } finally {
     if ($user) { Remove-LocalUser -SID $user.SID }
-    Remove-Item -LiteralPath $stage -Recurse -Force
+    # Windows can briefly retain emulated DLL image mappings after process
+    # exit. Retry this exact disposable directory; never suppress final failure.
+    for ($attempt = 0; $attempt -lt 6; $attempt++) {
+        try { Remove-Item -LiteralPath $stage -Recurse -Force; break }
+        catch {
+            if ($attempt -eq 5) { throw }
+            Start-Sleep -Milliseconds 500
+        }
+    }
 }

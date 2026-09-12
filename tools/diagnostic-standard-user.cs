@@ -78,7 +78,7 @@ public static class DiagnosticStandardUser {
             Marshal.Copy(data, bytes, 0, bytes.Length);
             using (var reader = new StreamReader(new MemoryStream(bytes), Encoding.UTF8, true))
                 return reader.ReadToEnd();
-        } finally { FreeLibrary(module); }
+        } finally { Check(FreeLibrary(module), "FreeLibrary resource mapping"); }
     }
     static IntPtr TokenInfo(IntPtr token, int kind) {
         int needed;
