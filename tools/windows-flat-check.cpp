@@ -9,9 +9,18 @@ int wmain(int argc, wchar_t** argv) {
     if (argc != 3) return 2;
     // The runtime is loaded by absolute path from a different cwd, with its
     // actual private imports. No Vulkan device enumeration is needed here.
-    HMODULE runtime = LoadLibraryExW(argv[1], nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR |
+    auto runtime_path = std::filesystem::absolute(argv[1]).make_preferred();
+    HMODULE runtime = LoadLibraryExW(runtime_path.c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR |
                                                      LOAD_LIBRARY_SEARCH_SYSTEM32);
-    if (!runtime) { std::printf("FAIL runtime load error=%lu\n", GetLastError()); return 1; }
+    if (!runtime) {
+        DWORD error = GetLastError();
+        auto vk_path = (runtime_path.parent_path() / argv[2]).make_preferred();
+        HMODULE dependency = LoadLibraryExW(vk_path.c_str(), nullptr,
+            LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
+        std::printf("FAIL runtime load error=%lu dependency=%p dependency_error=%lu path=%ls\n",
+                    error, static_cast<void*>(dependency), GetLastError(), runtime_path.c_str());
+        return 1;
+    }
     using Extension = void*(CL_API_CALL*)(const char*);
     auto extension = reinterpret_cast<Extension>(GetProcAddress(runtime, "clGetExtensionFunctionAddress"));
     if (!extension || !extension("clIcdGetPlatformIDsKHR") || extension("clDefinitelyMissingVIOGPU")) return 1;
