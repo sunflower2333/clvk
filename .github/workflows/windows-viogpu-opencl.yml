@@ -109,9 +109,9 @@ jobs:
           }
           cl /nologo /EHsc /std:c++17 /MD /Iexternal/OpenCL-Headers tools/viogpu-opencl-check.cpp /Febuild/package/viogpu-opencl-check.exe /link build/runtime/src/OpenCL.lib
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          cl /nologo /EHsc /std:c++17 /MD /DWIN32 /DNOMINMAX tools/dispatch-trace-check.cpp /Febuild/package/dispatch-trace-check.exe
+          cl /nologo /EHsc /std:c++17 /MD /DWIN32 /DNOMINMAX tools/dispatch-trace-check.cpp /Febuild/package/dispatch-trace-check.exe /link /MANIFEST:EMBED "/MANIFESTUAC:level='asInvoker' uiAccess='false'"
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          cl /nologo /EHsc /std:c++17 /MD /DWIN32 /DNOMINMAX /Iexternal/OpenCL-Headers tools/viogpu-opencl-dispatch-check.cpp /Febuild/package/viogpu-opencl-dispatch-check.exe /link build/runtime/src/OpenCL.lib
+          cl /nologo /EHsc /std:c++17 /MD /DWIN32 /DNOMINMAX /Iexternal/OpenCL-Headers tools/viogpu-opencl-dispatch-check.cpp /Febuild/package/viogpu-opencl-dispatch-check.exe /link build/runtime/src/OpenCL.lib /MANIFEST:EMBED "/MANIFESTUAC:level='asInvoker' uiAccess='false'"
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           if ('${{ matrix.arch }}' -ne 'arm64') {
             & build/package/dispatch-trace-check.exe

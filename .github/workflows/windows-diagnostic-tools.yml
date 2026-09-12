@@ -1,0 +1,84 @@
+name: Windows diagnostic tools as invoker
+on:
+  push:
+    branches: [work/control-as-invoker-20260912]
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  tools:
+    runs-on: windows-2022
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            msvc: amd64_arm64
+          - arch: x64
+            msvc: amd64
+          - arch: x86
+            msvc: amd64_x86
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: ${{ matrix.msvc }}
+      - name: Build only diagnostic tools against frozen runtime
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git submodule update --init --depth=1 external/OpenCL-Headers
+          if ($LASTEXITCODE) { throw 'Header checkout failed' }
+          gh run download 34693617321 -R sunflower2333/clvk -n viogpu-opencl-${{ matrix.arch }} -D frozen
+          if ($LASTEXITCODE) { throw 'Frozen runtime download failed' }
+          if ((Get-Content frozen/package/source.txt -First 1).Trim() -ne '7dfb36f67f47f152b93032fe9488cfe7e07eb486') { throw 'Wrong frozen runtime' }
+          New-Item -ItemType Directory out | Out-Null
+          cl /nologo /EHsc /std:c++17 /MD /DWIN32 /DNOMINMAX tools/dispatch-trace-check.cpp /Feout/dispatch-trace-check.exe /link /MANIFEST:EMBED "/MANIFESTUAC:level='asInvoker' uiAccess='false'"
+          if ($LASTEXITCODE) { throw 'Recorder build failed' }
+          cl /nologo /EHsc /std:c++17 /MD /DWIN32 /DNOMINMAX /Iexternal/OpenCL-Headers tools/viogpu-opencl-dispatch-check.cpp /Feout/viogpu-opencl-dispatch-check.exe /link frozen/package/OpenCL.lib /MANIFEST:EMBED "/MANIFESTUAC:level='asInvoker' uiAccess='false'"
+          if ($LASTEXITCODE) { throw 'Control build failed' }
+          foreach ($exe in Get-ChildItem out/*.exe) {
+            mt.exe "-inputresource:$($exe.FullName);#1" "-out:$($exe.FullName).manifest"
+            if ($LASTEXITCODE) { throw 'Embedded manifest extraction failed' }
+            [xml]$manifest = Get-Content "$($exe.FullName).manifest" -Raw
+            $levels = @($manifest.SelectNodes("//*[local-name()='requestedExecutionLevel']"))
+            if ($levels.Count -ne 1 -or $levels[0].level -ne 'asInvoker' -or $levels[0].uiAccess -ne 'false') { throw 'Wrong execution level resource' }
+            Get-FileHash $exe.FullName -Algorithm SHA256 | Format-List
+          }
+          @("tools_source=$env:GITHUB_SHA", 'runtime_source=7dfb36f67f47f152b93032fe9488cfe7e07eb486', 'runtime_ci=34693617321', 'payload=two_tools_only;runtime_not_rebuilt') | Set-Content out/source.txt
+          $hashes = @(Get-ChildItem out -File | Get-FileHash -Algorithm SHA256)
+          $hashes | ForEach-Object { $_.Hash + '  ' + [IO.Path]::GetFileName($_.Path) } | Set-Content out/SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: clvk-manifest-tools-${{ matrix.arch }}
+          path: out/
+          if-no-files-found: error
+  ordinary-user:
+    needs: tools
+    runs-on: windows-11-arm
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: clvk-manifest-tools-*
+          path: tool-artifacts
+      - name: Reuse exact frozen runtime dependencies
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          foreach ($arch in @('arm64','x64','x86')) {
+            gh run download 34693617321 -R sunflower2333/clvk -n "viogpu-opencl-$arch" -D "frozen/$arch"
+            if ($LASTEXITCODE) { throw 'Frozen runtime download failed' }
+          }
+      - name: Verify resources and launch actual tools as a standard user
+        shell: pwsh
+        run: ./tools/test-diagnostic-standard-user.ps1 -ToolsRoot tool-artifacts -FrozenRoot frozen
