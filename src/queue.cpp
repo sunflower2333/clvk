@@ -185,6 +185,14 @@ cl_int cvk_command_queue::enqueue_command(cvk_command* cmd, _cl_event** event) {
     // Enqueue the command
     std::lock_guard<std::mutex> lock(m_lock);
     if (cmd->can_be_batched()) {
+        auto* batchable = static_cast<cvk_command_batchable*>(cmd);
+        if (config.max_batch_duration_us) {
+            batchable->prepare_duration_estimate();
+            if (m_command_batch &&
+                !m_command_batch->accepts_cost(batchable->admission_cost())) {
+                if ((err = end_current_command_batch()) != CL_SUCCESS) return err;
+            }
+        }
         if (!m_command_batch) {
             // Create a new command batch
             m_command_batch = std::make_unique<cvk_command_batch>(this);
@@ -198,7 +206,8 @@ cl_int cvk_command_queue::enqueue_command(cvk_command* cmd, _cl_event** event) {
         }
 
         // End command batch when size limit reached
-        if (m_command_batch->batch_size() >= m_max_cmd_batch_size ||
+        if (m_command_batch->duration_limit_reached() ||
+            m_command_batch->batch_size() >= m_max_cmd_batch_size ||
             (m_nb_batch_in_flight == 0 &&
              m_command_batch->batch_size() >= m_max_first_cmd_batch_size)) {
             if ((err = end_current_command_batch()) != CL_SUCCESS) {
@@ -212,6 +221,8 @@ cl_int cvk_command_queue::enqueue_command(cvk_command* cmd, _cl_event** event) {
         }
 
         if (!cmd->is_built_before_enqueue()) {
+            if (config.max_batch_duration_us)
+                static_cast<cvk_command_batchable*>(cmd)->prepare_duration_estimate();
             // Build batchable command as non-batched (in its own command
             // buffer)
             err = static_cast<cvk_command_batchable*>(cmd)->build();
@@ -601,9 +612,9 @@ bool cvk_command_buffer::begin() {
 bool cvk_command_buffer::submit_and_wait() {
     auto& queue = m_queue->vulkan_queue();
     const auto* trace = m_dispatch_trace.get();
-    uint64_t started = 0;
+    const bool time_submission = trace || config.max_batch_duration_us;
+    uint64_t started = time_submission ? cvk_dispatch_trace::monotonic_ns() : 0;
     if (trace) {
-        started = cvk_dispatch_trace::monotonic_ns();
         cvk_info("DISPATCH_SUBMIT_BEGIN id=%llu mono_ns=%llu utc_ns=%llu cl_queue=%p vk_queue=%p cmdbuf=%p commands=%llu dispatches=%llu matched=%llu retained=%llu",
             (unsigned long long)trace->id, (unsigned long long)started,
             (unsigned long long)cvk_dispatch_trace::utc_ns(), (void*)&*m_queue,
@@ -621,6 +632,28 @@ bool cvk_command_buffer::submit_and_wait() {
                 r.region_global[0], r.region_global[1], r.region_global[2],
                 r.region_local[0], r.region_local[1], r.region_local[2],
                 r.region_offset[0], r.region_offset[1], r.region_offset[2]);
+            if (r.arguments) {
+                cvk_info("DISPATCH_ARGUMENTS id=%llu ordinal=%llu command=%p total=%llu retained=%llu",
+                    (unsigned long long)trace->id, (unsigned long long)r.ordinal,
+                    (void*)r.command, (unsigned long long)r.arguments->total,
+                    (unsigned long long)std::min<uint64_t>(r.arguments->total, cvk_dispatch_arguments::capacity));
+                for (size_t i = 0; i < std::min<uint64_t>(r.arguments->total, cvk_dispatch_arguments::capacity); ++i) {
+                    const auto& a = r.arguments->args[i];
+                    const auto hex = a.scalar_hex();
+                    cvk_info("DISPATCH_ARGUMENT id=%llu ordinal=%llu pos=%u kind=%u name=\"%s\" type=\"%s\" name_truncated=%u type_truncated=%u set=%u binding=%u offset=%u declared_size=%u scalar_valid=%u scalar_bytes=%u scalar_truncated=%u scalar_hex=%s resource=%p resource_bytes=%llu memory_type=%u flags=%llu parent_offset=%llu local_bytes=%llu image={%llu,%llu,%llu,%llu,%llu,%llu}",
+                        (unsigned long long)trace->id, (unsigned long long)r.ordinal,
+                        a.pos, a.kind, a.name.data(), a.type_name.data(),
+                        unsigned(a.name_truncated), unsigned(a.type_truncated),
+                        a.set, a.binding, a.offset, a.size, unsigned(a.scalar_valid),
+                        a.scalar_bytes, unsigned(a.scalar_truncated), hex.data(),
+                        (void*)a.resource, (unsigned long long)a.resource_bytes,
+                        a.memory_type, (unsigned long long)a.flags,
+                        (unsigned long long)a.parent_offset, (unsigned long long)a.local_bytes,
+                        (unsigned long long)a.image[0], (unsigned long long)a.image[1],
+                        (unsigned long long)a.image[2], (unsigned long long)a.image[3],
+                        (unsigned long long)a.image[4], (unsigned long long)a.image[5]);
+                }
+            }
         });
         // A TDR/process termination must not strand attribution in stdio.
         cvk_log_flush();
@@ -635,10 +668,12 @@ bool cvk_command_buffer::submit_and_wait() {
     }
 
     if (res != VK_SUCCESS) {
+        if (time_submission) m_elapsed_ns = cvk_dispatch_trace::monotonic_ns() - started;
         return false;
     }
 
     res = queue.wait_idle();
+    if (time_submission) m_elapsed_ns = cvk_dispatch_trace::monotonic_ns() - started;
     if (trace) {
         cvk_info("DISPATCH_WAIT_RETURN id=%llu elapsed_ns=%llu result=%d scope=whole-vulkan-queue",
             (unsigned long long)trace->id,
@@ -899,6 +934,7 @@ cl_int cvk_command_kernel::dispatch_uniform_region_within_vklimits(
         r.dimensions = m_dimensions;
         r.global = m_ndrange.gws; r.local = m_ndrange.lws; r.offset = m_ndrange.offset;
         r.region_global = region.gws; r.region_local = region.lws; r.region_offset = region.offset;
+        r.arguments = m_trace_arguments;
         trace->dispatch(m_kernel->name().c_str(), r);
     }
     vkCmdDispatch(command_buffer, num_workgroups[0], num_workgroups[1],
@@ -1148,6 +1184,7 @@ cvk_command_kernel::build_batchable_inner(cvk_command_buffer& command_buffer) {
     }
 
     // Dispatch work
+    capture_dispatch_arguments();
     err = build_and_dispatch_regions(command_buffer);
     if (err != CL_SUCCESS) {
         return err;
@@ -1178,6 +1215,78 @@ cvk_command_kernel::build_batchable_inner(cvk_command_buffer& command_buffer) {
         nullptr); // pImageMemoryBarriers
 
     return CL_SUCCESS;
+}
+
+void cvk_command_kernel::capture_dispatch_arguments() {
+    if (!config.dispatch_trace || !config.dispatch_trace_arguments) return;
+    const std::string& filter = config.dispatch_trace_arguments_kernel();
+    if (!filter.empty() && m_kernel->name().find(filter) == std::string::npos) return;
+    auto metadata = std::make_shared<cvk_dispatch_arguments>();
+    const auto& args = m_kernel->arguments();
+    metadata->total = args.size();
+    const auto* pod = m_argument_values->pod_data_if_present();
+    for (size_t i = 0; i < std::min(args.size(), cvk_dispatch_arguments::capacity); ++i) {
+        const auto& arg = args[i];
+        auto& out = metadata->args[i];
+        out.pos = arg.pos; out.kind = uint32_t(arg.kind);
+        out.set = arg.descriptorSet; out.binding = arg.binding;
+        out.offset = arg.offset; out.size = arg.size;
+        out.name_truncated = cvk_dispatch_arguments::text(out.name, arg.info.name);
+        out.type_truncated = cvk_dispatch_arguments::text(out.type_name, arg.info.type_name);
+        if (arg.is_pod()) {
+            out.capture_scalar(pod ? pod->data() : nullptr, pod ? pod->size() : 0,
+                arg.offset, arg.size);
+        } else if (arg.kind == kernel_argument_kind::local) {
+            out.local_bytes = m_argument_values->local_arg_size(arg.pos);
+        } else if (arg.is_mem_object_backed()) {
+            const auto* mem = static_cast<cvk_mem*>(m_argument_values->get_arg_value(arg));
+            out.resource = uintptr_t(mem);
+            if (mem) {
+                out.resource_bytes = mem->size(); out.memory_type = mem->type();
+                out.flags = mem->flags(); out.parent_offset = mem->parent_offset();
+                if (mem->is_image_type()) {
+                    const auto* image = static_cast<const cvk_image*>(mem);
+                    out.image = {image->width(), image->height(), image->depth(),
+                        image->array_size(), image->row_pitch(), image->slice_pitch()};
+                }
+            }
+        }
+    }
+    m_trace_arguments = std::move(metadata);
+}
+
+std::shared_ptr<cvk_batch_cost> cvk_command_kernel::find_batch_cost() {
+    cvk_batch_cost_key key;
+    key.value(m_dimensions);
+    for (auto value : m_ndrange.gws) key.value(value);
+    for (auto value : m_ndrange.lws) key.value(value);
+    for (auto value : m_ndrange.offset) key.value(value);
+    const auto values = m_kernel->argument_values();
+    const auto* pod = values->pod_data_if_present();
+    key.value(pod ? pod->size() : 0);
+    if (pod) key.append(pod->data(), pod->size());
+    for (const auto& arg : m_kernel->arguments()) {
+        key.value(uint32_t(arg.kind));
+        if (arg.kind == kernel_argument_kind::local) {
+            key.value(values->local_arg_size(arg.pos));
+        } else if (arg.is_mem_object_backed()) {
+            const auto* mem = static_cast<cvk_mem*>(values->get_arg_value(arg));
+            key.value(mem != nullptr);
+            if (mem) {
+                key.value(mem->size()); key.value(mem->type());
+                key.value(mem->flags()); key.value(mem->parent_offset());
+                if (mem->is_image_type()) {
+                    const auto* image = static_cast<const cvk_image*>(mem);
+                    key.value(image->width()); key.value(image->height());
+                    key.value(image->depth()); key.value(image->array_size());
+                    key.value(image->row_pitch()); key.value(image->slice_pitch());
+                }
+            }
+        } else if (arg.kind == kernel_argument_kind::sampler) {
+            key.value(uintptr_t(values->get_arg_value(arg)));
+        }
+    }
+    return m_kernel->batch_cost(key);
 }
 
 cl_int cvk_command_kernel::do_post_action() {
@@ -1289,18 +1398,50 @@ cl_int cvk_command_batchable::get_timestamp_query_results(cl_ulong* start,
 cl_int cvk_command_batchable::do_action() {
     CVK_ASSERT(m_command_buffer);
 
-    if (!m_command_buffer->submit_and_wait()) {
+    const bool success = m_command_buffer->submit_and_wait();
+    if (m_batch_cost)
+        m_batch_cost->observe(m_command_buffer->elapsed_ns(),
+            uint64_t(config.max_batch_duration_us()) * 1000, success);
+    if (!success) {
         return CL_OUT_OF_RESOURCES;
     }
 
     return do_post_action();
 }
 
+void cvk_command_batch::observe_duration(bool api_success) {
+    const uint64_t budget = m_duration_window.budget_ns;
+    if (!budget) return;
+    const uint64_t elapsed = m_command_buffer->elapsed_ns();
+    const auto first = m_commands.front()->batch_cost();
+    bool homogeneous = first != nullptr;
+    for (const auto& command : m_commands)
+        homogeneous &= command->batch_cost() == first;
+    // Reject the whole over-budget sample before apportioning it. A reset can
+    // falsely return API success near a watchdog boundary; it must not train.
+    const bool eligible = api_success && elapsed && elapsed < budget;
+    const uint64_t sample = cvk_batch_cost_sample(elapsed, budget, api_success,
+        m_commands.size(), homogeneous);
+    for (const auto& command : m_commands)
+        if (command->batch_cost()) command->batch_cost()->observe(sample, budget, api_success);
+    if (config.dispatch_trace) {
+        const auto* trace = m_command_buffer->dispatch_trace();
+        cvk_info("BATCH_DURATION id=%llu cl_queue=%p commands=%llu elapsed_ns=%llu budget_ns=%llu api_success=%u eligible=%u homogeneous=%u scope=whole-vulkan-queue",
+            (unsigned long long)(trace ? trace->id : 0),
+            (void*)&*m_queue, (unsigned long long)m_commands.size(),
+            (unsigned long long)elapsed, (unsigned long long)budget,
+            unsigned(api_success), unsigned(eligible), unsigned(homogeneous));
+        cvk_log_flush();
+    }
+}
+
 cl_int cvk_command_batch::do_action() {
 
     cvk_info("executing batch of %lu commands", m_commands.size());
 
-    if (!m_command_buffer->submit_and_wait()) {
+    const bool success = m_command_buffer->submit_and_wait();
+    observe_duration(success);
+    if (!success) {
         return CL_OUT_OF_RESOURCES;
     }
 

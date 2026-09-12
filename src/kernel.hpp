@@ -22,6 +22,7 @@
 #include "spirv/unified1/NonSemanticClspvReflection.h"
 
 #include "memory.hpp"
+#include "batch_duration.hpp"
 #include "objects.hpp"
 #include "program.hpp"
 
@@ -32,7 +33,10 @@ struct cvk_kernel : public _cl_kernel, api_object<object_magic::kernel> {
     cvk_kernel(cvk_program* program, const char* name)
         : api_object(program->context()), m_program(program),
           m_entry_point(nullptr), m_name(name), m_sampler_metadata(nullptr),
-          m_image_metadata(nullptr) {}
+          m_image_metadata(nullptr) {
+        if (config.max_batch_duration_us)
+            m_batch_costs = std::make_unique<cvk_batch_cost_cache>();
+    }
 
     CHECK_RETURN cl_int init();
     std::unique_ptr<cvk_kernel> clone(cl_int* errcode_ret) const;
@@ -81,6 +85,10 @@ struct cvk_kernel : public _cl_kernel, api_object<object_magic::kernel> {
     cvk_program* program() const { return m_program; }
 
     const std::vector<kernel_argument>& arguments() const { return m_args; }
+
+    std::shared_ptr<cvk_batch_cost> batch_cost(const cvk_batch_cost_key& key) {
+        return m_batch_costs ? m_batch_costs->find(key) : nullptr;
+    }
 
     kernel_argument_kind arg_kind(int index) const {
         return m_args[index].kind;
@@ -166,6 +174,7 @@ private:
     std::shared_ptr<cvk_kernel_argument_values> m_argument_values;
     const kernel_sampler_metadata_map* m_sampler_metadata;
     const kernel_image_metadata_map* m_image_metadata;
+    std::unique_ptr<cvk_batch_cost_cache> m_batch_costs;
 };
 
 static inline cvk_kernel* icd_downcast(cl_kernel kernel) {
@@ -361,6 +370,9 @@ struct cvk_kernel_argument_values {
 
     const std::vector<uint8_t>& pod_data() const { return *m_pod_data; }
     std::vector<uint8_t>& pod_data() { return *m_pod_data; }
+    const std::vector<uint8_t>* pod_data_if_present() const {
+        return m_pod_data.get();
+    }
 
     size_t local_arg_size(int pos) const { return m_local_args_size[pos]; }
 

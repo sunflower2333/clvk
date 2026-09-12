@@ -394,6 +394,7 @@ struct cvk_command_buffer {
     CHECK_RETURN bool submit_and_wait();
 
     cvk_dispatch_trace* dispatch_trace() { return m_dispatch_trace.get(); }
+    uint64_t elapsed_ns() const { return m_elapsed_ns; }
 
     operator VkCommandBuffer() { return m_command_buffer; }
 
@@ -401,6 +402,7 @@ protected:
     cvk_command_queue_holder m_queue;
     VkCommandBuffer m_command_buffer;
     std::unique_ptr<cvk_dispatch_trace> m_dispatch_trace;
+    uint64_t m_elapsed_ns = 0;
 };
 
 #define CLVK_COMMAND_BATCH 0x5000
@@ -732,6 +734,13 @@ struct cvk_command_batchable : public cvk_command {
     CHECK_RETURN virtual cl_int
     build_batchable_inner(cvk_command_buffer& cmdbuf) = 0;
 
+    void prepare_duration_estimate() {
+        m_batch_cost = find_batch_cost();
+        m_admission_cost = m_batch_cost ? m_batch_cost->estimate() : 0;
+    }
+    uint64_t admission_cost() const { return m_admission_cost; }
+    const std::shared_ptr<cvk_batch_cost>& batch_cost() const { return m_batch_cost; }
+
     CHECK_RETURN cl_int set_profiling_info_end() {
         // If it has already been set, don't override it
         if (m_event->get_profiling_info(CL_PROFILING_COMMAND_END) != 0) {
@@ -774,11 +783,14 @@ struct cvk_command_batchable : public cvk_command {
     }
 
 private:
+    virtual std::shared_ptr<cvk_batch_cost> find_batch_cost() { return {}; }
     CHECK_RETURN virtual cl_int do_post_action() { return CL_SUCCESS; }
     CHECK_RETURN cl_int do_action() override;
 
     std::unique_ptr<cvk_command_buffer> m_command_buffer;
     VkQueryPool m_query_pool;
+    std::shared_ptr<cvk_batch_cost> m_batch_cost;
+    uint64_t m_admission_cost = 0;
 
     static const int NUM_POOL_QUERIES_PER_COMMAND = 2;
     static const int POOL_QUERY_CMD_START = 0;
@@ -849,6 +861,8 @@ struct cvk_command_kernel final : public cvk_command_batchable {
     }
 
 private:
+    std::shared_ptr<cvk_batch_cost> find_batch_cost() override final;
+    void capture_dispatch_arguments();
     CHECK_RETURN cl_int do_post_action() override final;
 
     CHECK_RETURN cl_int
@@ -869,11 +883,16 @@ private:
     cvk_ndrange m_ndrange;
     VkPipeline m_pipeline;
     std::shared_ptr<cvk_kernel_argument_values> m_argument_values;
+    std::shared_ptr<const cvk_dispatch_arguments> m_trace_arguments;
 };
 
 struct cvk_command_batch : public cvk_command {
     cvk_command_batch(cvk_command_queue* queue)
-        : cvk_command(CLVK_COMMAND_BATCH, queue) {}
+        : cvk_command(CLVK_COMMAND_BATCH, queue),
+          m_duration_window(uint64_t(config.max_batch_duration_us()) * 1000) {}
+
+    bool accepts_cost(uint64_t cost) const { return m_duration_window.accepts(cost); }
+    bool duration_limit_reached() const { return m_duration_window.full(); }
 
     cl_int add_command(cvk_command_batchable* cmd) {
         if (!m_command_buffer) {
@@ -893,6 +912,7 @@ struct cvk_command_batch : public cvk_command {
         cvk_debug_fn("add command %p (%s) to batch %p", cmd,
                      cl_command_type_to_string(cmd->type()), this);
         m_commands.emplace_back(cmd);
+        if (m_duration_window.budget_ns) m_duration_window.add(cmd->admission_cost());
 
         return ret;
     }
@@ -941,9 +961,11 @@ struct cvk_command_batch : public cvk_command {
 
 private:
     CHECK_RETURN cl_int do_action() override final;
+    void observe_duration(bool api_success);
 
     std::vector<std::unique_ptr<cvk_command_batchable>> m_commands;
     std::unique_ptr<cvk_command_buffer> m_command_buffer;
+    cvk_batch_duration_window m_duration_window;
 };
 
 struct cvk_command_map_buffer final : public cvk_command_buffer_base_region {

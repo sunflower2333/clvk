@@ -1,7 +1,7 @@
 name: Windows VIOGPU OpenCL
 on:
   push:
-    branches: [viogpu-windows-opencl, work/horizon-dispatch-diagnostic-20260912]
+    branches: [viogpu-windows-opencl, work/horizon-dispatch-diagnostic-20260912, work/duration-bounded-batches-20260912]
   workflow_dispatch:
 permissions:
   contents: read
@@ -17,6 +17,8 @@ jobs:
         run: |
           clang++ -std=c++17 -g -O1 -Wall -Wextra -Werror -fsanitize=address,undefined -pthread tools/dispatch-trace-check.cpp -o dispatch-trace-check
           ./dispatch-trace-check
+          clang++ -std=c++17 -g -O1 -Wall -Wextra -Werror -fsanitize=address,undefined -pthread tools/batch-duration-check.cpp -o batch-duration-check
+          ./batch-duration-check
   compiler:
     runs-on: windows-2022
     steps:
@@ -109,14 +111,18 @@ jobs:
           }
           cl /nologo /EHsc /std:c++17 /MD /Iexternal/OpenCL-Headers tools/viogpu-opencl-check.cpp /Febuild/package/viogpu-opencl-check.exe /link build/runtime/src/OpenCL.lib
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          cl /nologo /EHsc /std:c++17 /MD /DWIN32 /DNOMINMAX tools/dispatch-trace-check.cpp /Febuild/package/dispatch-trace-check.exe
+          cl /nologo /EHsc /std:c++17 /MD /DWIN32 /DNOMINMAX tools/dispatch-trace-check.cpp /Febuild/package/dispatch-trace-check.exe /link /MANIFEST:EMBED "/MANIFESTUAC:level='asInvoker' uiAccess='false'"
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          cl /nologo /EHsc /std:c++17 /MD /DWIN32 /DNOMINMAX /Iexternal/OpenCL-Headers tools/viogpu-opencl-dispatch-check.cpp /Febuild/package/viogpu-opencl-dispatch-check.exe /link build/runtime/src/OpenCL.lib
+          cl /nologo /EHsc /std:c++17 /MD /DWIN32 /DNOMINMAX /Iexternal/OpenCL-Headers tools/viogpu-opencl-dispatch-check.cpp /Febuild/package/viogpu-opencl-dispatch-check.exe /link build/runtime/src/OpenCL.lib /MANIFEST:EMBED "/MANIFESTUAC:level='asInvoker' uiAccess='false'"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cl /nologo /EHsc /std:c++17 /MD /DWIN32 /DNOMINMAX tools/batch-duration-check.cpp /Febuild/package/batch-duration-check.exe /link /MANIFEST:EMBED "/MANIFESTUAC:level='asInvoker' uiAccess='false'"
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           if ('${{ matrix.arch }}' -ne 'arm64') {
             & build/package/dispatch-trace-check.exe
             if ($LASTEXITCODE) { exit $LASTEXITCODE }
             & build/package/viogpu-opencl-dispatch-check.exe --help
+            if ($LASTEXITCODE) { exit $LASTEXITCODE }
+            & build/package/batch-duration-check.exe
             if ($LASTEXITCODE) { exit $LASTEXITCODE }
           }
           dumpbin /headers build/package/OpenCL.dll build/package/vulkan-1.dll build/package/viogpu-opencl-check.exe | Out-File build/package/pe-headers.txt
@@ -152,7 +158,7 @@ jobs:
           # common ancestor and the runtime payload is under package/.
           $package = (Resolve-Path candidate/package).Path
           if ((Get-Content (Join-Path $package source.txt) -First 1).Trim() -ne $env:GITHUB_SHA) { throw 'Wrong source artifact' }
-          foreach ($name in @('dispatch-trace-check.exe', 'viogpu-opencl-dispatch-check.exe')) {
+          foreach ($name in @('dispatch-trace-check.exe', 'viogpu-opencl-dispatch-check.exe', 'batch-duration-check.exe')) {
             $path = (Resolve-Path (Join-Path $package $name)).Path
             $bytes = [IO.File]::ReadAllBytes($path)
             $offset = [BitConverter]::ToInt32($bytes, 0x3c)
@@ -163,3 +169,5 @@ jobs:
           if ($LASTEXITCODE) { throw 'Native ARM64 recorder failed' }
           & (Join-Path $package viogpu-opencl-dispatch-check.exe) --help
           if ($LASTEXITCODE) { throw 'Native ARM64 control CLI failed' }
+          & (Join-Path $package batch-duration-check.exe)
+          if ($LASTEXITCODE) { throw 'Native ARM64 duration admission checks failed' }

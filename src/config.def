@@ -176,6 +176,11 @@ PROPERTY(uint32_t, preferred_subgroup_size, 0u) // 0 meaning no preference
 // Enable dynamic batch sizing for command execution.
 OPTION(bool, dynamic_batches, false)
 
+// Optional estimated submit duration budget in microseconds (0 disables it).
+// Unknown kernel/geometry/scalar combinations are first submitted alone.
+// This is conservative batch admission, not a GPU timeout or preemption bound.
+OPTION(uint32_t, max_batch_duration_us, 0u)
+
 // Specify the number of instances of a kernel that can be in flight at the
 // same time. Increasing this value has an impact on the memory usage as it
 // will allocate more descriptor sets per kernel.
@@ -274,6 +279,11 @@ OPTION(bool, dispatch_trace, false)
 // Optional kernel-name substring filter. Total command/dispatch counts remain
 // unfiltered. Retain the last32 matching dispatches per command buffer.
 OPTION(std::string, dispatch_trace_kernel, "")
+
+// Capture at most16 argument metadata records with at most32 scalar bytes each.
+// No buffer/image content is read. Optional name filter applies only to args.
+OPTION(bool, dispatch_trace_arguments, false)
+OPTION(std::string, dispatch_trace_arguments_kernel, "")
 
 // Control SPIR-V validation behaviour:
 //  * 0: skip validation

@@ -9,6 +9,8 @@
 #include <cstring>
 #include <string>
 #include <utility>
+#include <memory>
+#include "dispatch_arguments.hpp"
 
 // Diagnostic metadata only. Recording never changes dispatch geometry,
 // dependencies, submission boundaries, waits or completion status.
@@ -21,6 +23,7 @@ struct cvk_dispatch_trace {
         uint32_t dimensions = 0;
         std::array<uint32_t, 3> global{}, local{}, offset{};
         std::array<uint32_t, 3> region_global{}, region_local{}, region_offset{};
+        std::shared_ptr<const cvk_dispatch_arguments> arguments;
     };
     static constexpr size_t capacity = 32;
     explicit cvk_dispatch_trace(std::string filter)
