@@ -174,6 +174,9 @@ else()
     if (CLVK_EXTERNAL_CLSPV)
       target_compile_definitions(clvk-config-definitions INTERFACE
         DEFAULT_CLSPV_BINARY_PATH="${CLVK_EXTERNAL_CLSPV_PATH}")
+      if(CLVK_WINDOWS_FLAT_DRIVER)
+        target_compile_definitions(clvk-config-definitions INTERFACE CLVK_WINDOWS_FLAT_DRIVER=1)
+      endif()
     else()
     add_dependencies(OpenCL-objects clspv)
     target_compile_definitions(clvk-config-definitions INTERFACE
@@ -207,6 +210,9 @@ endfunction(CLLibrary)
 
 CLLibrary(OpenCL SHARED)
 CLLibrary(OpenCL-static STATIC)
+if(WIN32)
+  set_target_properties(OpenCL PROPERTIES OUTPUT_NAME "${CLVK_WINDOWS_OUTPUT_NAME}")
+endif()
 
 if(NOT APPLE)
   set_target_properties(OpenCL PROPERTIES

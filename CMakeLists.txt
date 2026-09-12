@@ -14,6 +14,10 @@
 
 cmake_minimum_required(VERSION 3.9)
 
+if(POLICY CMP0091)
+  cmake_policy(SET CMP0091 NEW)
+endif()
+
 project(clvk VERSION 0.1 DESCRIPTION "OpenCL implementation on Vulkan" LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
@@ -59,6 +63,8 @@ endif()
 option(CLVK_CLSPV_ONLINE_COMPILER "Use the Clspv C++ API for compilation of kernels")
 option(CLVK_EXTERNAL_CLSPV "Use an independently packaged clspv executable" OFF)
 set(CLVK_EXTERNAL_CLSPV_PATH "clspv.exe" CACHE STRING "Default external clspv executable")
+set(CLVK_WINDOWS_OUTPUT_NAME "OpenCL" CACHE STRING "Windows vendor DLL/import library basename")
+option(CLVK_WINDOWS_FLAT_DRIVER "Resolve the external compiler as a flat driver sibling" OFF)
 if (CLVK_EXTERNAL_CLSPV AND CLVK_CLSPV_ONLINE_COMPILER)
   message(FATAL_ERROR "External clspv cannot be linked as an online compiler")
 endif()

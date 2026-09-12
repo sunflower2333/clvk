@@ -1,0 +1,15 @@
+cmake_minimum_required(VERSION 3.22.1)
+project(clvk_private_vulkan LANGUAGES C)
+if(NOT WIN32 OR NOT CLVK_VULKAN_SOURCE OR NOT CLVK_VULKAN_NAME MATCHES "^viogpucl_vk_(arm64|x64|x86)$")
+  message(FATAL_ERROR "A Windows source checkout and architecture-specific private Vulkan name are required")
+endif()
+# Relink the pinned loader using its original sources and export list. The
+# generated module definition replaces only LIBRARY identity before linkage.
+file(READ "${CLVK_VULKAN_SOURCE}/loader/vulkan-1.def" private_exports)
+string(REPLACE "LIBRARY vulkan-1.dll" "LIBRARY ${CLVK_VULKAN_NAME}.dll" private_exports "${private_exports}")
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/private-vulkan.def" "${private_exports}")
+add_subdirectory("${CLVK_VULKAN_SOURCE}" upstream)
+get_target_property(loader_sources vulkan SOURCES)
+list(FILTER loader_sources EXCLUDE REGEX "[/\\\\]vulkan-1\\.def$")
+set_property(TARGET vulkan PROPERTY SOURCES "${loader_sources};${CMAKE_CURRENT_BINARY_DIR}/private-vulkan.def")
+set_target_properties(vulkan PROPERTIES OUTPUT_NAME "${CLVK_VULKAN_NAME}")

@@ -26,6 +26,7 @@
 
 #ifdef _WIN32
 #include <windows.h>
+#include "windows_driver_path.hpp"
 #endif
 
 const config_struct config;
@@ -430,6 +431,20 @@ void init_config() {
     // Resolve our bundled compiler from the ICD module, never that directory
     // or PATH. Explicit user configuration continues to take precedence.
     if (!config.clspv_path.set) {
+#if CLVK_WINDOWS_FLAT_DRIVER
+        auto compiler = cvk_windows_module_sibling(
+            reinterpret_cast<const void*>(&init_config), L"viogpu_clspv_x64.exe");
+        if (!compiler.empty()) {
+            auto& option = const_cast<config_value<std::string>&>(config.clspv_path);
+            option.value = compiler.string();
+            option.set = true;
+        } else {
+            // An absolute invalid path fails closed without a PATH search.
+            auto& option = const_cast<config_value<std::string>&>(config.clspv_path);
+            option.value = "\\\\?\\GLOBALROOT\\invalid-clvk-compiler-path.exe";
+            option.set = true;
+        }
+#else
         HMODULE module = nullptr;
         wchar_t path[32768];
         if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
@@ -448,6 +463,7 @@ void init_config() {
                 }
             }
         }
+#endif
     }
 #endif
     print_config();
