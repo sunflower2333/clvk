@@ -18,6 +18,7 @@
 #include <memory>
 
 #include "config.hpp"
+#include "dispatch_trace.hpp"
 #include "event.hpp"
 #include "init.hpp"
 #include "kernel.hpp"
@@ -366,7 +367,11 @@ private:
 
 struct cvk_command_buffer {
     cvk_command_buffer(cvk_command_queue* queue)
-        : m_queue(queue), m_command_buffer(VK_NULL_HANDLE) {}
+        : m_queue(queue), m_command_buffer(VK_NULL_HANDLE) {
+        if (config.dispatch_trace)
+            m_dispatch_trace = std::make_unique<cvk_dispatch_trace>(
+                config.dispatch_trace_kernel());
+    }
 
     ~cvk_command_buffer() {
         if (m_command_buffer != VK_NULL_HANDLE) {
@@ -388,11 +393,14 @@ struct cvk_command_buffer {
 
     CHECK_RETURN bool submit_and_wait();
 
+    cvk_dispatch_trace* dispatch_trace() { return m_dispatch_trace.get(); }
+
     operator VkCommandBuffer() { return m_command_buffer; }
 
 protected:
     cvk_command_queue_holder m_queue;
     VkCommandBuffer m_command_buffer;
+    std::unique_ptr<cvk_dispatch_trace> m_dispatch_trace;
 };
 
 #define CLVK_COMMAND_BATCH 0x5000

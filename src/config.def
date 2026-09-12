@@ -267,6 +267,14 @@ EARLY_OPTION(std::string, config_file, "")
 //  * 1: enabled
 OPTION(bool, validation_layers, false)
 
+// Emit bounded dispatch-to-submit attribution without changing execution.
+// Use LOG>=3 and log group none; records are flushed before GPU submission.
+OPTION(bool, dispatch_trace, false)
+
+// Optional kernel-name substring filter. Total command/dispatch counts remain
+// unfiltered. Retain the last32 matching dispatches per command buffer.
+OPTION(std::string, dispatch_trace_kernel, "")
+
 // Control SPIR-V validation behaviour:
 //  * 0: skip validation
 //  * 1: warn when validation fails

@@ -600,14 +600,51 @@ bool cvk_command_buffer::begin() {
 
 bool cvk_command_buffer::submit_and_wait() {
     auto& queue = m_queue->vulkan_queue();
+    const auto* trace = m_dispatch_trace.get();
+    uint64_t started = 0;
+    if (trace) {
+        started = cvk_dispatch_trace::monotonic_ns();
+        cvk_info("DISPATCH_SUBMIT_BEGIN id=%llu mono_ns=%llu utc_ns=%llu cl_queue=%p vk_queue=%p cmdbuf=%p commands=%llu dispatches=%llu matched=%llu retained=%llu",
+            (unsigned long long)trace->id, (unsigned long long)started,
+            (unsigned long long)cvk_dispatch_trace::utc_ns(), (void*)&*m_queue,
+            (void*)queue.handle(), (void*)m_command_buffer,
+            (unsigned long long)trace->commands, (unsigned long long)trace->dispatches,
+            (unsigned long long)trace->matched,
+            (unsigned long long)std::min<uint64_t>(trace->matched, cvk_dispatch_trace::capacity));
+        trace->each([&](const cvk_dispatch_trace::record& r) {
+            cvk_info("DISPATCH_RECORD id=%llu ordinal=%llu command=%p event=%p kernel=%p program=%p name=%s truncated=%u dimensions=%u gws={%u,%u,%u} lws={%u,%u,%u} offset={%u,%u,%u} region_gws={%u,%u,%u} region_lws={%u,%u,%u} region_offset={%u,%u,%u}",
+                (unsigned long long)trace->id, (unsigned long long)r.ordinal,
+                (void*)r.command, (void*)r.event, (void*)r.kernel, (void*)r.program,
+                r.name.data(), unsigned(r.name_truncated), r.dimensions,
+                r.global[0], r.global[1], r.global[2], r.local[0], r.local[1], r.local[2],
+                r.offset[0], r.offset[1], r.offset[2],
+                r.region_global[0], r.region_global[1], r.region_global[2],
+                r.region_local[0], r.region_local[1], r.region_local[2],
+                r.region_offset[0], r.region_offset[1], r.region_offset[2]);
+        });
+        // A TDR/process termination must not strand attribution in stdio.
+        cvk_log_flush();
+    }
 
     VkResult res = queue.submit(m_command_buffer);
+    if (trace) {
+        cvk_info("DISPATCH_SUBMIT_RETURN id=%llu elapsed_ns=%llu result=%d",
+            (unsigned long long)trace->id,
+            (unsigned long long)(cvk_dispatch_trace::monotonic_ns() - started), res);
+        cvk_log_flush();
+    }
 
     if (res != VK_SUCCESS) {
         return false;
     }
 
     res = queue.wait_idle();
+    if (trace) {
+        cvk_info("DISPATCH_WAIT_RETURN id=%llu elapsed_ns=%llu result=%d scope=whole-vulkan-queue",
+            (unsigned long long)trace->id,
+            (unsigned long long)(cvk_dispatch_trace::monotonic_ns() - started), res);
+        cvk_log_flush();
+    }
 
     if (res != VK_SUCCESS) {
         return false;
@@ -855,6 +892,15 @@ cl_int cvk_command_kernel::dispatch_uniform_region_within_vklimits(
                            &region_group_offsets);
     }
 
+    if (auto* trace = command_buffer.dispatch_trace()) {
+        cvk_dispatch_trace::record r;
+        r.command = (uintptr_t)this; r.event = (uintptr_t)m_event;
+        r.kernel = (uintptr_t)&*m_kernel; r.program = (uintptr_t)program;
+        r.dimensions = m_dimensions;
+        r.global = m_ndrange.gws; r.local = m_ndrange.lws; r.offset = m_ndrange.offset;
+        r.region_global = region.gws; r.region_local = region.lws; r.region_offset = region.offset;
+        trace->dispatch(m_kernel->name().c_str(), r);
+    }
     vkCmdDispatch(command_buffer, num_workgroups[0], num_workgroups[1],
                   num_workgroups[2]);
 
@@ -1205,6 +1251,7 @@ cl_int cvk_command_batchable::build(cvk_command_buffer& command_buffer) {
     if (err != CL_SUCCESS) {
         return err;
     }
+    if (auto* trace = command_buffer.dispatch_trace()) trace->command();
 
     // Sample timestamp if profiling
     if (profiling && m_queue->profiling_on_device()) {

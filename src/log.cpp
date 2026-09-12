@@ -219,6 +219,8 @@ void cvk_log_default(loglevel level, const char* fmt, va_list& args) {
     }
 }
 
+void cvk_log_flush() { fflush(gLoggingFile); }
+
 void cvk_log(uint64_t group_mask, loglevel level, const char* fmt, ...) {
 
     if (!cvk_log_level_enabled(level)) {

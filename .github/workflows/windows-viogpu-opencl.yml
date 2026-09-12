@@ -1,12 +1,22 @@
 name: Windows VIOGPU OpenCL
 on:
   push:
-    branches: [viogpu-windows-opencl]
+    branches: [viogpu-windows-opencl, work/horizon-dispatch-diagnostic-20260912]
   workflow_dispatch:
 permissions:
   contents: read
   actions: read
 jobs:
+  diagnostic:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - name: Check production bounded dispatch recorder
+        run: |
+          clang++ -std=c++17 -g -O1 -Wall -Wextra -Werror -fsanitize=address,undefined -pthread tools/dispatch-trace-check.cpp -o dispatch-trace-check
+          ./dispatch-trace-check
   compiler:
     runs-on: windows-2022
     steps:
@@ -99,6 +109,16 @@ jobs:
           }
           cl /nologo /EHsc /std:c++17 /MD /Iexternal/OpenCL-Headers tools/viogpu-opencl-check.cpp /Febuild/package/viogpu-opencl-check.exe /link build/runtime/src/OpenCL.lib
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cl /nologo /EHsc /std:c++17 /MD /DWIN32 /DNOMINMAX tools/dispatch-trace-check.cpp /Febuild/package/dispatch-trace-check.exe
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cl /nologo /EHsc /std:c++17 /MD /DWIN32 /DNOMINMAX /Iexternal/OpenCL-Headers tools/viogpu-opencl-dispatch-check.cpp /Febuild/package/viogpu-opencl-dispatch-check.exe /link build/runtime/src/OpenCL.lib
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          if ('${{ matrix.arch }}' -ne 'arm64') {
+            & build/package/dispatch-trace-check.exe
+            if ($LASTEXITCODE) { exit $LASTEXITCODE }
+            & build/package/viogpu-opencl-dispatch-check.exe --help
+            if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          }
           dumpbin /headers build/package/OpenCL.dll build/package/vulkan-1.dll build/package/viogpu-opencl-check.exe | Out-File build/package/pe-headers.txt
           dumpbin /exports build/package/OpenCL.dll | Out-File build/package/exports.txt
           dumpbin /dependents build/package/OpenCL.dll | Out-File build/package/dependents.txt
@@ -115,3 +135,31 @@ jobs:
             build/package/
             build/runtime/CMakeFiles/CMakeConfigureLog.yaml
           if-no-files-found: warn
+  arm64-diagnostic:
+    needs: build
+    runs-on: windows-11-arm
+    timeout-minutes: 5
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: viogpu-opencl-arm64
+          path: candidate
+      - name: Execute production recorder on native ARM64
+        shell: pwsh
+        run: |
+          if ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture -ne 'Arm64') { throw 'Native ARM64 runner required' }
+          # The artifact also includes runtime/CMakeFiles, so build/ is its
+          # common ancestor and the runtime payload is under package/.
+          $package = (Resolve-Path candidate/package).Path
+          if ((Get-Content (Join-Path $package source.txt) -First 1).Trim() -ne $env:GITHUB_SHA) { throw 'Wrong source artifact' }
+          foreach ($name in @('dispatch-trace-check.exe', 'viogpu-opencl-dispatch-check.exe')) {
+            $path = (Resolve-Path (Join-Path $package $name)).Path
+            $bytes = [IO.File]::ReadAllBytes($path)
+            $offset = [BitConverter]::ToInt32($bytes, 0x3c)
+            if ([BitConverter]::ToUInt16($bytes, $offset + 4) -ne 0xaa64) { throw 'Wrong PE architecture' }
+            Get-FileHash -Algorithm SHA256 $path | Format-List
+          }
+          & (Join-Path $package dispatch-trace-check.exe)
+          if ($LASTEXITCODE) { throw 'Native ARM64 recorder failed' }
+          & (Join-Path $package viogpu-opencl-dispatch-check.exe) --help
+          if ($LASTEXITCODE) { throw 'Native ARM64 control CLI failed' }
