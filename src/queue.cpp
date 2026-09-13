@@ -1454,6 +1454,12 @@ cl_int cvk_command_batchable::get_timestamp_query_results(cl_ulong* start,
 
     *start = dev->timestamp_to_ns(ts_start_raw);
     *end = dev->timestamp_to_ns(ts_end_raw);
+    if (config.dispatch_trace) {
+        cvk_info("DEVICE_TIMESTAMP_QUERY command=%p event=%p start_raw=%llu end_raw=%llu start_ns=%llu end_ns=%llu",
+                 (void*)this, (void*)event(),
+                 (unsigned long long)ts_start_raw, (unsigned long long)ts_end_raw,
+                 (unsigned long long)*start, (unsigned long long)*end);
+    }
 
     return CL_COMPLETE;
 }

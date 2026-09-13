@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 // Candidate ICD semantic control. --any-device permits software Vulkan in CI.
-#define CL_TARGET_OPENCL_VERSION 120
+#define CL_TARGET_OPENCL_VERSION 210
+#define CL_USE_DEPRECATED_OPENCL_1_2_APIS
 #include <CL/cl.h>
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -63,6 +65,26 @@ static int prepare_budget(unsigned budget) {
 }
 static void CL_CALLBACK callback(cl_event, cl_int status, void* data) {
     if (status <= CL_COMPLETE) static_cast<std::atomic<unsigned>*>(data)->fetch_add(1);
+}
+static bool check_timers(cl_device_id device) {
+    cl_ulong previous=0;
+    for(unsigned i=0;i<8;++i) {
+        const auto before=std::chrono::steady_clock::now();
+        cl_ulong host=0;
+        const cl_int status=clGetHostTimer(device,&host);
+        const auto after=std::chrono::steady_clock::now();
+        if(status==CL_INVALID_OPERATION) {
+            std::puts("TIMER_UNSUPPORTED calibrated=0; host-batch envelopes cannot validate per-command device timing");
+            return false;
+        }
+        check(status,"actual calibrated host timer");
+        const auto first=std::chrono::duration_cast<std::chrono::nanoseconds>(before.time_since_epoch()).count();
+        const auto last=std::chrono::duration_cast<std::chrono::nanoseconds>(after.time_since_epoch()).count();
+        require(host>=cl_ulong(first)&&host<=cl_ulong(last)&&host>=previous,"calibrated host clock uses steady-clock nanosecond epoch");
+        previous=host;
+    }
+    std::puts("TIMER_MODE device-calibrated; actual event query diagnostics required");
+    return true;
 }
 static const char* kernel_source = R"CLC(
 __kernel void tile_semantics(__global uint* output, __global uint* histogram,
@@ -313,13 +335,14 @@ static void run_batch(cl_context ctx,cl_device_id device,cl_program program,
 
 int main(int argc,char** argv) {
     std::setvbuf(stdout,nullptr,_IONBF,0);
-    unsigned budget=7;bool any=false,environment_only=false;
+    unsigned budget=7;bool any=false,environment_only=false,timers_only=false;
     for(int i=1;i<argc;++i) {
         if(!std::strcmp(argv[i],"--help")) {
-            std::puts("Candidate tiled semantics: --groups 0..65535 (default7), --any-device (explicit CI software allowance), --check-environment (no GPU; inherited process setting). Builtin IDs/sizes/offsets, nonuniform tails, barrier+atomics, subbuffer canaries, argument lifetime, events/profiling and imported uniform binary control. No benchmark claim.");return 0;
+            std::puts("Candidate tiled semantics: --groups 0..65535 (default7), --any-device (explicit CI software allowance), --check-environment (no GPU; inherited process setting), --check-timers (actual calibration plus compiled batch/query control). Requires real calibrated per-command timestamps; unsupported host-envelope fallback exits3. Builtin IDs/sizes/offsets, nonuniform tails, barrier+atomics, subbuffer canaries, argument lifetime, events/profiling and imported uniform binary control. No benchmark claim.");return 0;
         }
         if(!std::strcmp(argv[i],"--any-device")) any=true;
         else if(!std::strcmp(argv[i],"--check-environment")) environment_only=true;
+        else if(!std::strcmp(argv[i],"--check-timers")) timers_only=true;
         else if(!std::strcmp(argv[i],"--groups")&&i+1<argc) {
             char* end=nullptr;auto n=std::strtoul(argv[++i],&end,10);
             if(!*argv[i]||*end||n>65535)return 2;
@@ -351,8 +374,15 @@ int main(int argc,char** argv) {
         if(device)break;
     }
     require(device!=nullptr,"expected GPU device");
+    if(!check_timers(device)) return 3;
     cl_int status;auto ctx=clCreateContext(nullptr,1,&device,nullptr,nullptr,&status);check(status,"context");
     auto source=build(ctx,device,"-cl-std=CL3.0",false);
+    if(timers_only) {
+        run_batch(ctx,device,source,67,"within-tail");
+        check(clReleaseProgram(source),"release timer source");check(clReleaseContext(ctx),"release timer context");
+        std::puts("TIMER_QUERY_PASS actual compiled recurrence, callbacks and ordered per-command device profiling; not full semantic or benchmark acceptance");
+        return 0;
+    }
     empty_range(ctx,device,source);
     run_batch(ctx,device,source,67,"within-tail");
     run_batch(ctx,device,source,97,"exact-tail");

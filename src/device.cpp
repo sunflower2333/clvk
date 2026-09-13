@@ -17,7 +17,11 @@
 #include <functional>
 #include <iterator>
 #include <sstream>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
+#include "calibrated_clock.hpp"
 #include "config.hpp"
 #include "device.hpp"
 #include "init.hpp"
@@ -843,10 +847,27 @@ bool cvk_device::create_vulkan_queues_and_device(uint32_t num_queues,
 
 bool cvk_device::init_time_management(VkInstance instance) {
 
+#ifdef _WIN32
+    m_host_time_domain = VK_TIME_DOMAIN_QUERY_PERFORMANCE_COUNTER_EXT;
+    LARGE_INTEGER frequency{};
+    if (!QueryPerformanceFrequency(&frequency) || frequency.QuadPart <= 0) {
+        cvk_warn("QueryPerformanceFrequency failed; calibrated profiling unavailable");
+        return true;
+    }
+    m_host_time_frequency = uint64_t(frequency.QuadPart);
+#else
+    m_host_time_domain = VK_TIME_DOMAIN_CLOCK_MONOTONIC_EXT;
+    m_host_time_frequency = 1000000000;
+#endif
+
     if (is_vulkan_extension_enabled(
             VK_EXT_CALIBRATED_TIMESTAMPS_EXTENSION_NAME)) {
         auto func = GET_INSTANCE_PROC(
             instance, vkGetPhysicalDeviceCalibrateableTimeDomainsEXT);
+        if (!func) {
+            cvk_warn("Calibrated timestamp extension has no time-domain entry point");
+            return true;
+        }
         uint32_t num_time_domains;
         VkResult res;
         res = func(m_pdev, &num_time_domains, nullptr);
@@ -867,12 +888,12 @@ bool cvk_device::init_time_management(VkInstance instance) {
         }
 
         bool has_device = false;
-        bool has_monotonic = false;
+        bool has_host = false;
         for (auto td : supported_time_domains) {
             cvk_info("  %s",
                      vulkan_calibrateable_time_domain_string(td).c_str());
-            if (td == VK_TIME_DOMAIN_CLOCK_MONOTONIC_EXT) {
-                has_monotonic = true;
+            if (td == m_host_time_domain) {
+                has_host = true;
             }
 
             if (td == VK_TIME_DOMAIN_DEVICE_EXT) {
@@ -880,20 +901,23 @@ bool cvk_device::init_time_management(VkInstance instance) {
             }
         }
 
-        if (has_device && has_monotonic) {
-            m_has_timer_support = true;
+        if (has_device && has_host) {
             m_vkfns.vkGetCalibratedTimestampsEXT =
                 GET_INSTANCE_PROC(instance, vkGetCalibratedTimestampsEXT);
+            m_has_timer_support = m_vkfns.vkGetCalibratedTimestampsEXT != nullptr;
         }
     }
 
     if (!m_has_timer_support) {
-        cvk_warn("This device does not support VK_EXT_calibrated_timestamps or "
-                 "it does not support the required "
-                 "VK_TIME_DOMAIN_CLOCK_MONOTONIC_EXT and "
-                 "VK_TIME_DOMAIN_DEVICE_EXT time domains");
+        cvk_warn("Calibrated profiling unavailable: need VK_EXT_calibrated_timestamps, "
+                 "DEVICE and %s domains and a callable timestamp entry point",
+                 vulkan_calibrateable_time_domain_string(m_host_time_domain).c_str());
         cvk_warn("clGetHostTimer and clGetDeviceAndHostTimer will not work");
         cvk_warn("Command queue profiling will suffer from limitations");
+    } else {
+        cvk_info("CALIBRATED_CLOCK host_domain=%s host_frequency=%llu",
+                 vulkan_calibrateable_time_domain_string(m_host_time_domain).c_str(),
+                 (unsigned long long)m_host_time_frequency);
     }
 
     return true;
@@ -1283,13 +1307,17 @@ void cvk_device::select_work_group_size(
 
 cl_int cvk_device::get_device_host_timer(cl_ulong* device_timestamp,
                                          cl_ulong* host_timestamp) const {
+    // An explicit query-profiling override must not dereference a missing
+    // calibrated timestamp function on an unsupported driver.
+    if (!m_has_timer_support || !m_vkfns.vkGetCalibratedTimestampsEXT)
+        return CL_INVALID_OPERATION;
     auto vkdev = vulkan_device();
 
     uint64_t timestamps[2];
     uint64_t max_deviation;
     VkCalibratedTimestampInfoEXT timestamp_infos[2] = {
         {VK_STRUCTURE_TYPE_CALIBRATED_TIMESTAMP_INFO_EXT, nullptr,
-         VK_TIME_DOMAIN_CLOCK_MONOTONIC_EXT},
+         m_host_time_domain},
         {VK_STRUCTURE_TYPE_CALIBRATED_TIMESTAMP_INFO_EXT, nullptr,
          VK_TIME_DOMAIN_DEVICE_EXT}};
 
@@ -1309,7 +1337,10 @@ cl_int cvk_device::get_device_host_timer(cl_ulong* device_timestamp,
         return CL_OUT_OF_RESOURCES;
     }
 
-    *host_timestamp = timestamps[0];
+    uint64_t host_ns;
+    if (!cvk_clock_to_ns(timestamps[0], m_host_time_frequency, host_ns))
+        return CL_OUT_OF_RESOURCES;
+    *host_timestamp = host_ns;
     if (device_timestamp != nullptr) {
         *device_timestamp = timestamp_to_ns(timestamps[1]);
     }

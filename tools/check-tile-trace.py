@@ -9,6 +9,11 @@ p.add_argument("log", type=Path)
 p.add_argument("--groups", type=int, required=True)
 a = p.parse_args()
 data = a.log.read_text(errors="replace")
+assert "TIMER_MODE device-calibrated" in data, "real calibrated device timing required"
+queries = re.findall(r"DEVICE_TIMESTAMP_QUERY command=(\S+) event=(\S+) start_raw=(\d+) end_raw=(\d+) start_ns=(\d+) end_ns=(\d+)", data)
+assert len(queries) == 46, "actual device timestamp query pair required per nonempty command"
+for query in queries:
+    assert int(query[2]) <= int(query[3]) and int(query[4]) <= int(query[5])
 assert re.search(r"PASS \d+ actual compiled-kernel", data), "semantic control did not pass"
 assert "EMPTY_PASS zero global size" in data, "empty NDRange no-work regression required"
 assert len(re.findall(r"^CASE_PASS ", data, re.M)) == 7, "seven actual semantic cases required"

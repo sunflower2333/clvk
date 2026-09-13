@@ -889,6 +889,8 @@ private:
     std::mutex m_pipeline_cache_mutex;
 
     bool m_has_timer_support{};
+    VkTimeDomainEXT m_host_time_domain = VK_TIME_DOMAIN_DEVICE_EXT;
+    uint64_t m_host_time_frequency = 0;
     bool m_has_fp16_support{};
     bool m_has_int8_support{};
     bool m_has_subgroups_support{};

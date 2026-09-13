@@ -87,3 +87,34 @@ watchdog interval and a cheap large grid can suffer avoidable submission
 overhead. Preserve the opt-in policy, measure original application work and
 actual host retirement, and assess a complete valid benchmark separately.
 Increasing a global group threshold without that evidence is not acceptance.
+
+## Calibrated timing requirement on Windows
+
+The control now requires actual calibrated per-command timing and exits3 with
+`TIMER_UNSUPPORTED` before kernel work if the driver cannot provide it. The old
+host fallback copies each batch's START/END envelope to all its public events;
+that fallback is preserved but is not accepted as device timing. The strict
+cross-command END<=nextSTART assertion is unchanged.
+
+On Windows, CLVK selects `VK_TIME_DOMAIN_QUERY_PERFORMANCE_COUNTER_EXT` paired
+with DEVICE, with an actual callable calibrated timestamp function. Host values
+are raw QPC ticks per the Vulkan contract and are converted with the actual
+`QueryPerformanceFrequency` to nanoseconds in the MSVCsteady_clock epoch.
+Exact integer scaling checks overflow and avoids floating-point uptime loss.
+Linux retains its CLOCK_MONOTONIC domain. Extension/domain absence is not
+overridden; an explicit timestamp-query setting cannot call a null calibrated
+function. No Vulkan capabilities are fabricated by this CLVK change.
+
+`--check-timers` performs eight real host calibration calls checked against
+the surrounding steady-clock interval, then compiles and executes the5-group
+recurrence warmup and twelve ready commands. It requires all per-event callback,
+output and ordered profiling checks and prints`TIMER_QUERY_PASS` on success.
+It is a limited timer/batch diagnostic, not the full7-case semantic test.
+With dispatch tracing, `DEVICE_TIMESTAMP_QUERY` records actual retrieved raw
+device query pairs and their nanosecond values. The full trace oracle requires
+46such pairs for the46nonempty semantic/batch commands.
+
+The Windows clock regression executes1000actual QPC samples against the local
+steady_clock epoch for each native/emulated architecture. It verifies host
+arithmetic/platform integration only; the Adreno calibrated bridge remains a
+separate required dependency owned by the Mesa/KMD/host worker.
