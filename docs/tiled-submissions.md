@@ -118,3 +118,10 @@ The Windows clock regression executes1000actual QPC samples against the local
 steady_clock epoch for each native/emulated architecture. It verifies host
 arithmetic/platform integration only; the Adreno calibrated bridge remains a
 separate required dependency owned by the Mesa/KMD/host worker.
+
+The Linux software regression uses a10s batch-duration window: cold lavapipe
+JIT measured254ms inCI, whose conservative doubled retained estimate correctly
+prevents two commands sharing a1s window. This software-only test control keeps
+real sharing observable without changing duration learning, kernel behavior or
+the strict timing assertions. The bounded target control's1s setting is separate;
+neither is a recommended application policy.

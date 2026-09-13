@@ -83,7 +83,10 @@ jobs:
           test -f "$VK_ICD_FILENAMES"
           cat "$VK_ICD_FILENAMES"
           export CLVK_DISPATCH_TRACE=1 CLVK_LOG=3 CLVK_LOG_COLOUR=0
-          export CLVK_MAX_BATCH_DURATION_US=1000000 CLVK_MAX_CMD_BATCH_SIZE=10000 CLVK_MAX_FIRST_CMD_BATCH_SIZE=10000 CLVK_DYNAMIC_BATCHES=0
+          # Cold lavapipe JIT can cost >250ms; the conservative 2x retained
+          # duration estimate then correctly prevents two commands fitting 1s.
+          # This larger software-only test window makes actual sharing observable.
+          export CLVK_MAX_BATCH_DURATION_US=10000000 CLVK_MAX_CMD_BATCH_SIZE=10000 CLVK_MAX_FIRST_CMD_BATCH_SIZE=10000 CLVK_DYNAMIC_BATCHES=0
           for budget in 0 1 7; do
             timeout 90 build/viogpu-opencl-tile-check --any-device --groups "$budget" > "build/tile-$budget.log" 2>&1 || { cat "build/tile-$budget.log"; exit 1; }
             python3 tools/check-tile-trace.py "build/tile-$budget.log" --groups "$budget"
