@@ -854,7 +854,10 @@ struct cvk_command_kernel final : public cvk_command_batchable {
     CHECK_RETURN cl_int build() override;
 
     bool can_be_batched() const override final {
+        // An unmeasured shape seen in an over-target shared submission runs
+        // alone once so its own cost is attributable.
         return !m_tile_budget && !m_kernel->uses_printf() &&
+               !(m_dispatch_cost && m_dispatch_cost->isolate()) &&
                cvk_command_batchable::can_be_batched();
     }
 
@@ -913,6 +916,7 @@ private:
     uint32_t m_tile_budget;
     bool m_tile_first = true;
     uint64_t m_tile_ordinal = 0;
+    uint64_t m_tiles_elapsed_ns = 0;
     cvk_ndrange_tiles m_tiles;
     cvk_ndrange_tile m_tile;
 };

@@ -187,11 +187,13 @@ OPTION(uint32_t, max_batch_duration_us, 0u)
 OPTION(uint32_t, max_dispatch_workgroups, 0u)
 
 // Opt-in per-submission GPU time target in microseconds (0 disables it).
-// Each kernel and argument shape records its worst measured submission time
-// per work item. Later source-generated NDRanges estimated above the target are
-// tiled so every tile is estimated within it, and known estimates bound how
-// many commands share one submission. The first execution of a shape is not
-// bounded, and a single workgroup is never split. Not a timeout.
+// Each kernel and argument shape records its worst attributable submission time
+// per work item, from samples of at least a quarter of the target. Later
+// source-generated NDRanges estimated above the target are tiled so every tile
+// is estimated within it, and known estimates bound how many commands share one
+// submission. An unmeasured shape seen in an over-target shared submission runs
+// alone once. The first execution of a shape is not bounded, and a single
+// workgroup is never split. Not a timeout.
 OPTION(uint32_t, max_dispatch_duration_us, 0u)
 
 // Specify the number of instances of a kernel that can be in flight at the

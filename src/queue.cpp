@@ -1248,6 +1248,7 @@ cl_int cvk_command_kernel::build() {
             !m_tiles.next(m_tile)) return CL_INVALID_GLOBAL_WORK_SIZE;
         m_tile_first = true;
         m_tile_ordinal = 0;
+        m_tiles_elapsed_ns = 0;
         if (m_duration_tiled && m_dispatch_cost->first_report(m_tile_budget)) {
             cvk_warn("NDRANGE_DURATION_TILES kernel=%s gws={%u,%u,%u} lws={%u,%u,%u} estimate_ns=%llu target_ns=%llu budget=%u",
                      m_kernel->name().c_str(), m_ndrange.gws[0], m_ndrange.gws[1],
@@ -1282,10 +1283,7 @@ cl_int cvk_command_kernel::do_action() {
                 cvk_log_flush();
             }
             if (!m_command_buffer->submit_and_wait()) return CL_OUT_OF_RESOURCES;
-            // Each tile is its own submission, so its time is attributable.
-            if (m_dispatch_cost)
-                m_dispatch_cost->observe(m_command_buffer->elapsed_ns(),
-                                         cvk_ndrange_items(m_tile.gws));
+            m_tiles_elapsed_ns += m_command_buffer->elapsed_ns();
             return CL_SUCCESS;
         },
         [&](bool& more) -> int {
@@ -1294,7 +1292,13 @@ cl_int cvk_command_kernel::do_action() {
             m_tile_first = false;
             return cvk_command_batchable::build();
         },
-        [&]() -> int { return do_post_action(); });
+        [&]() -> int {
+            // Learn from the whole command, not per tile: a queue stall during
+            // one small tile then adds a few ms to all items instead of being
+            // charged to that tile's few items.
+            observe_submission(m_tiles_elapsed_ns, 1);
+            return do_post_action();
+        });
 }
 
 void cvk_command_kernel::capture_dispatch_arguments() {
@@ -1404,12 +1408,13 @@ uint32_t cvk_command_kernel::initial_tile_budget(cvk_kernel* kernel,
 void cvk_command_kernel::observe_submission(uint64_t elapsed_ns,
                                             size_t commands) {
     if (!m_dispatch_cost) return;
-    // A shared submission within the target cannot identify a slow command.
-    // One beyond it attributes the whole time to each command: an upper bound.
-    if (commands > 1 &&
-        elapsed_ns <= uint64_t(config.max_dispatch_duration_us()) * 1000)
+    const uint64_t target = uint64_t(config.max_dispatch_duration_us()) * 1000;
+    if (commands > 1) {
+        m_dispatch_cost->observe_shared(elapsed_ns, target);
         return;
-    m_dispatch_cost->observe(elapsed_ns, cvk_ndrange_items(m_ndrange.gws));
+    }
+    m_dispatch_cost->observe(elapsed_ns, cvk_ndrange_items(m_ndrange.gws),
+                             cvk_dispatch_learning_minimum_ns(target));
 }
 
 cl_int cvk_command_kernel::do_post_action() {

@@ -17,8 +17,15 @@
 struct cvk_dispatch_cost {
     static constexpr unsigned fraction_bits = 16;
 
-    void observe(uint64_t elapsed_ns, uint64_t items) {
-        if (!elapsed_ns || !items) return;
+    // One whole command attributable to this shape: a lone submission, or the
+    // sum of all its tiles over all its items. Wall-clock samples include
+    // submit/wait overhead and stalls behind other GPU clients; charging those
+    // to the few items of one small tile made tiles collapse toward single
+    // workgroups. Samples below minimum_ns only record that the shape has been
+    // measured.
+    void observe(uint64_t elapsed_ns, uint64_t items, uint64_t minimum_ns = 0) {
+        m_measured.store(true, std::memory_order_relaxed);
+        if (!elapsed_ns || !items || elapsed_ns < minimum_ns) return;
         const uint64_t scaled = elapsed_ns > (UINT64_MAX >> fraction_bits)
                                     ? UINT64_MAX
                                     : elapsed_ns << fraction_bits;
@@ -61,6 +68,18 @@ struct cvk_dispatch_cost {
                                              UINT32_MAX));
     }
 
+    // A shared submission over the target cannot say which member was slow.
+    // Charging its whole time to every member made cheap kernels tile and
+    // split batches persistently. Instead, run an unmeasured member alone once.
+    void observe_shared(uint64_t elapsed_ns, uint64_t target_ns) {
+        if (target_ns && elapsed_ns > target_ns)
+            m_suspect.store(true, std::memory_order_relaxed);
+    }
+    bool isolate() const {
+        return m_suspect.load(std::memory_order_relaxed) &&
+               !m_measured.load(std::memory_order_relaxed);
+    }
+
     // Report each distinct duration-derived budget once per shape.
     bool first_report(uint32_t budget) {
         return m_reported_budget.exchange(budget, std::memory_order_relaxed) !=
@@ -70,6 +89,8 @@ struct cvk_dispatch_cost {
 private:
     std::atomic<uint64_t> m_scaled_ns_per_item{0};
     std::atomic<uint32_t> m_reported_budget{0};
+    std::atomic<bool> m_measured{false};
+    std::atomic<bool> m_suspect{false};
 };
 
 // Owned by one kernel object. In-flight commands keep their state alive even
@@ -99,6 +120,12 @@ private:
 
 inline uint64_t cvk_ndrange_items(const std::array<uint32_t, 3>& gws) {
     return uint64_t(gws[0]) * gws[1] * gws[2];
+}
+
+// Shortest sample worth learning from for a target: fixed submission overhead
+// then stays a small fraction of the measured time.
+inline uint64_t cvk_dispatch_learning_minimum_ns(uint64_t target_ns) {
+    return target_ns / 4;
 }
 
 // Tile budget for one NDRange: a geometry budget the range exceeds, lowered to
