@@ -1,7 +1,7 @@
 name: Windows VIOGPU OpenCL
 on:
   push:
-    branches: [viogpu-windows-opencl, work/flat-runtime-20260912, work/flat-duration-dispatch-20260913, work/tiled-submit-20260913, work/small-ndrange-batching-20260913, work/windows-calibrated-clock-20260913]
+    branches: [viogpu-windows-opencl, work/flat-runtime-20260912, work/flat-duration-dispatch-20260913, work/tiled-submit-20260913, work/small-ndrange-batching-20260913, work/windows-calibrated-clock-20260913, work/timestamp-wrap-20260913]
   workflow_dispatch:
 permissions:
   contents: read

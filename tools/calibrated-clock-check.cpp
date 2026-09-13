@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "../src/calibrated_clock.hpp"
+#include "../src/device_timestamp.hpp"
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -13,7 +14,64 @@ static unsigned checks;
 static void expected(uint64_t ticks,uint64_t frequency,uint64_t value) {
     uint64_t result=123;CHECK(cvk_clock_to_ns(ticks,frequency,result));CHECK(result==value);
 }
+static void check_device_timestamps() {
+    constexpr uint64_t wrap = uint64_t(1) << 48;
+    uint64_t first = 17, last = 23;
+    // One physical command straddles wrap, with calibration on either side.
+    CHECK(cvk_timestamp_pair_to_host(wrap-3, 5, 10, 1000, 48, 1, first, last));
+    CHECK(first == 987 && last == 995);
+    CHECK(cvk_timestamp_pair_to_host(wrap-3, 5, wrap-10, 1000, 48, 1, first, last));
+    CHECK(first == 1007 && last == 1015);
+    CHECK(cvk_timestamp_pair_to_host(UINT64_MAX-2, 5, 10, 1000, 64, 1, first, last));
+    CHECK(first == 987 && last == 995);
+    CHECK(cvk_timestamp_pair_to_host(wrap-3, 5, 10, 1000, 48, 2.5, first, last));
+    CHECK(first == 967 && last == 987);
+    // Unused upper query bits must not contaminate48bit time differences.
+    CHECK(cvk_timestamp_pair_to_host(UINT64_MAX-2, wrap+5, 10, 1000, 48, 1, first, last));
+    CHECK(first == 987 && last == 995);
+    CHECK(!cvk_timestamp_pair_to_host(5, 4, 10, 1000, 48, 1, first, last));
+    CHECK(!cvk_timestamp_pair_to_host(0, wrap/2, 10, 1000, 48, 1, first, last));
+    CHECK(!cvk_timestamp_pair_to_host(wrap/2, wrap/2+1, 0, 1000, 48, 1, first, last));
+    CHECK(!cvk_timestamp_pair_to_host(0, 1, 10, 5, 48, 1, first, last));
+    CHECK(!cvk_timestamp_pair_to_host(1, 2, 0, UINT64_MAX, 48, 1, first, last));
+    CHECK(!cvk_timestamp_pair_to_host(0, 1, 0, 1000, 0, 1, first, last));
+    CHECK(!cvk_timestamp_pair_to_host(0, 1, 0, 1000, 65, 1, first, last));
+    CHECK(!cvk_timestamp_pair_to_host(0, 1, 0, 1000, 48, 0, first, last));
+    CHECK(!cvk_timestamp_pair_to_host(0, 1, 0, 1000, 48, INFINITY, first, last));
+    CHECK(!cvk_timestamp_pair_to_host(0, 1, 0, 1000, 48, NAN, first, last));
+    // Exact full-width1ns counters must preserve low bits above2^53.
+    const uint64_t large = (uint64_t(1) << 54) + 1;
+    CHECK(cvk_timestamp_pair_to_host(large, large+1, 0, 0, 64, 1, first, last));
+    CHECK(first == large && last == large+1);
+    // Independent signed-rational oracle: generate unwrapped nearby coordinates
+    // and mask only the public counter representation. Includes raw wrap, events
+    // before/after calibration, adjacent commands and fractional-ns periods.
+    uint64_t state = 0xfedcba9876543210ull;
+    for (uint32_t bits : {8u, 16u, 32u, 48u, 64u}) {
+        const uint64_t mask = UINT64_MAX >> (64-bits);
+        for (unsigned i=0; i<2000; ++i) {
+            state = state*6364136223846793005ull + 1;
+            const uint64_t anchor = state & mask;
+            const int64_t begin = int64_t((state >> 10)%81)-40;
+            const int64_t end = begin + int64_t((state >> 20)%20);
+            const auto expected_ns = [](int64_t offset) {
+                const int64_t numerator = offset*5;
+                const int64_t scaled = numerator>=0 ? numerator/2 : -((-numerator+1)/2);
+                return uint64_t(1000000+scaled);
+            };
+            CHECK(cvk_timestamp_pair_to_host(anchor+uint64_t(begin), anchor+uint64_t(end),
+                anchor, 1000000, bits, 2.5, first, last));
+            CHECK(first == expected_ns(begin) && last == expected_ns(end));
+            uint64_t next_first, next_last;
+            CHECK(cvk_timestamp_pair_to_host(anchor+uint64_t(end), anchor+uint64_t(end+1),
+                anchor, 1000000, bits, 2.5, next_first, next_last));
+            CHECK(last == next_first && next_first <= next_last);
+        }
+    }
+    std::puts("DEVICE_COUNTER_WRAP_PASS bits=8,16,32,48,64 raw-pairs=20000; no GPU execution");
+}
 int main() {
+    check_device_timestamps();
     uint64_t result=42;
     CHECK(!cvk_clock_to_ns(1,0,result)&&result==42);
     CHECK(!cvk_clock_to_ns(UINT64_MAX,1,result)&&result==42);

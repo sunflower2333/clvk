@@ -22,6 +22,7 @@
 #endif
 
 #include "calibrated_clock.hpp"
+#include "device_timestamp.hpp"
 #include "config.hpp"
 #include "device.hpp"
 #include "init.hpp"
@@ -224,6 +225,7 @@ bool cvk_device::init_queues(uint32_t* num_queues, uint32_t* queue_family) {
 
     // Initialise the queue allocator
     m_vulkan_queue_alloc_index = 0;
+    m_timestamp_valid_bits = families[*queue_family].timestampValidBits;
 
     return true;
 }
@@ -1307,6 +1309,16 @@ void cvk_device::select_work_group_size(
 
 cl_int cvk_device::get_device_host_timer(cl_ulong* device_timestamp,
                                          cl_ulong* host_timestamp) const {
+    uint64_t raw;
+    cl_int err = get_device_host_timer_raw(device_timestamp ? &raw : nullptr,
+                                          host_timestamp);
+    if (err == CL_SUCCESS && device_timestamp)
+        *device_timestamp = timestamp_to_ns(raw);
+    return err;
+}
+
+cl_int cvk_device::get_device_host_timer_raw(uint64_t* device_timestamp,
+                                             cl_ulong* host_timestamp) const {
     // An explicit query-profiling override must not dereference a missing
     // calibrated timestamp function on an unsupported driver.
     if (!m_has_timer_support || !m_vkfns.vkGetCalibratedTimestampsEXT)
@@ -1342,14 +1354,26 @@ cl_int cvk_device::get_device_host_timer(cl_ulong* device_timestamp,
         return CL_OUT_OF_RESOURCES;
     *host_timestamp = host_ns;
     if (device_timestamp != nullptr) {
-        *device_timestamp = timestamp_to_ns(timestamps[1]);
+        *device_timestamp = timestamps[1];
+        if (config.dispatch_trace) {
+            // Vulkan reports uncertainty in nanoseconds, not DEVICE/QPC ticks.
+            // Keep it observable without clamping or relaxing event ordering.
+            cvk_info("CALIBRATED_SAMPLE device_raw=%llu host_raw=%llu host_ns=%llu max_deviation_ns=%llu valid_bits=%u period_ns=%.9g",
+                     (unsigned long long)timestamps[1],
+                     (unsigned long long)timestamps[0],
+                     (unsigned long long)host_ns,
+                     (unsigned long long)max_deviation, m_timestamp_valid_bits,
+                     double(vulkan_limits().timestampPeriod));
+        }
     }
 
     return CL_SUCCESS;
 }
 
 cl_int cvk_device::update_device_host_timer_no_lock() {
-    return get_device_host_timer(&m_sync_dev, &m_sync_host);
+    cl_int err = get_device_host_timer_raw(&m_sync_dev, &m_sync_host);
+    m_sync_valid = err == CL_SUCCESS;
+    return err;
 }
 
 cl_int cvk_device::update_device_host_timer() {
@@ -1357,18 +1381,26 @@ cl_int cvk_device::update_device_host_timer() {
     return update_device_host_timer_no_lock();
 }
 
-cl_int cvk_device::device_timer_to_host(cl_ulong dev, cl_ulong& host) {
+cl_int cvk_device::device_timer_pair_to_host(uint64_t start, uint64_t end,
+                                           cl_ulong& start_host, cl_ulong& end_host) {
     std::lock_guard<std::mutex> lock(m_sync_mutex);
-    if (dev > m_sync_dev) {
+    bool before_anchor;
+    uint64_t distance;
+    if (!m_sync_valid ||
+        (cvk_timestamp_delta(end, m_sync_dev, m_timestamp_valid_bits,
+                              before_anchor, distance) &&
+         !before_anchor && distance != 0)) {
         cl_int err = update_device_host_timer_no_lock();
         if (err != CL_SUCCESS) {
             return err;
         }
     }
-    if (m_sync_host > m_sync_dev) {
-        host = (m_sync_host - m_sync_dev) + dev;
-    } else {
-        host = dev - (m_sync_dev - m_sync_host);
-    }
+    uint64_t first, last;
+    if (!cvk_timestamp_pair_to_host(start, end, m_sync_dev, m_sync_host,
+                                    m_timestamp_valid_bits,
+                                    vulkan_limits().timestampPeriod, first, last))
+        return CL_OUT_OF_RESOURCES;
+    start_host = first;
+    end_host = last;
     return CL_SUCCESS;
 }

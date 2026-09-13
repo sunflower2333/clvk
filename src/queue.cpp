@@ -1452,13 +1452,15 @@ cl_int cvk_command_batchable::get_timestamp_query_results(cl_ulong* start,
     auto ts_start_raw = timestamps[POOL_QUERY_CMD_START];
     auto ts_end_raw = timestamps[POOL_QUERY_CMD_END];
 
-    *start = dev->timestamp_to_ns(ts_start_raw);
-    *end = dev->timestamp_to_ns(ts_end_raw);
+    const auto err = dev->device_timer_pair_to_host(ts_start_raw, ts_end_raw,
+                                                    *start, *end);
+    if (err != CL_SUCCESS) return err;
     if (config.dispatch_trace) {
-        cvk_info("DEVICE_TIMESTAMP_QUERY command=%p event=%p start_raw=%llu end_raw=%llu start_ns=%llu end_ns=%llu",
+        cvk_info("DEVICE_TIMESTAMP_QUERY command=%p event=%p start_raw=%llu end_raw=%llu start_ns=%llu end_ns=%llu clock=host valid_bits=%u",
                  (void*)this, (void*)event(),
                  (unsigned long long)ts_start_raw, (unsigned long long)ts_end_raw,
-                 (unsigned long long)*start, (unsigned long long)*end);
+                 (unsigned long long)*start, (unsigned long long)*end,
+                 dev->timestamp_valid_bits());
     }
 
     return CL_COMPLETE;

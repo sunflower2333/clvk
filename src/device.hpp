@@ -646,7 +646,9 @@ struct cvk_device : public _cl_device_id,
     CHECK_RETURN cl_int get_device_host_timer(cl_ulong* dev_ts,
                                               cl_ulong* host_ts) const;
     CHECK_RETURN cl_int update_device_host_timer();
-    cl_int device_timer_to_host(cl_ulong dev, cl_ulong& host);
+    cl_int device_timer_pair_to_host(uint64_t start, uint64_t end,
+                                     cl_ulong& start_host, cl_ulong& end_host);
+    uint32_t timestamp_valid_bits() const { return m_timestamp_valid_bits; }
 
     uint64_t timestamp_to_ns(uint64_t ts) const {
         double ns_per_tick = vulkan_limits().timestampPeriod;
@@ -897,9 +899,13 @@ private:
     bool m_has_subgroup_size_selection{};
 
     CHECK_RETURN cl_int update_device_host_timer_no_lock();
+    CHECK_RETURN cl_int get_device_host_timer_raw(uint64_t* device_timestamp,
+                                                 cl_ulong* host_timestamp) const;
     std::mutex m_sync_mutex;
     cl_ulong m_sync_host{};
-    cl_ulong m_sync_dev{};
+    uint64_t m_sync_dev{}; // Raw ticks; retain the counter's wrapping domain.
+    uint32_t m_timestamp_valid_bits{};
+    bool m_sync_valid{};
 
     spv_target_env m_vulkan_spirv_env;
 
