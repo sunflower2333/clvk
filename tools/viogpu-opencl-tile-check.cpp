@@ -10,6 +10,9 @@
 #include <cstring>
 #include <string>
 #include <vector>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 static unsigned checks;
 static void require(bool yes, const char* what) {
@@ -27,6 +30,35 @@ static void env(const char* name, const char* value) {
     require(_putenv_s(name,value)==0,"environment");
 #else
     require(setenv(name,value,1)==0,"environment");
+#endif
+}
+// The executable and ICD use distinct static CRT environments on Windows.
+// If --groups changes the inherited value, start a child whose DLLs see the
+// correct value from process creation. Changing only this EXE's getenv state
+// after DLL load is not a reliable way to configure the candidate ICD.
+static int prepare_budget(unsigned budget) {
+    const auto value=std::to_string(budget);
+#ifdef _WIN32
+    const auto* inherited=std::getenv("CLVK_MAX_DISPATCH_WORKGROUPS");
+    if(inherited&&value==inherited) return -1;
+    require(SetEnvironmentVariableA("CLVK_MAX_DISPATCH_WORKGROUPS",value.c_str())!=0,"set inherited tile budget");
+    wchar_t executable[32768]{};
+    const auto length=GetModuleFileNameW(nullptr,executable,32768);
+    require(length>0&&length<32768,"executable path");
+    const std::wstring original=GetCommandLineW();
+    std::vector<wchar_t> command(original.begin(),original.end());command.push_back(0);
+    STARTUPINFOW startup{};startup.cb=sizeof(startup);
+    PROCESS_INFORMATION process{};
+    require(CreateProcessW(executable,command.data(),nullptr,nullptr,TRUE,0,nullptr,nullptr,&startup,&process)!=0,"start inherited-environment control");
+    CloseHandle(process.hThread);
+    const auto waited=WaitForSingleObject(process.hProcess,INFINITE);
+    DWORD code=1;const auto queried=GetExitCodeProcess(process.hProcess,&code);
+    CloseHandle(process.hProcess);
+    require(waited==WAIT_OBJECT_0&&queried,"wait inherited-environment control");
+    return code==0 ? 0 : 1;
+#else
+    env("CLVK_MAX_DISPATCH_WORKGROUPS",value.c_str());
+    return -1;
 #endif
 }
 static void CL_CALLBACK callback(cl_event, cl_int status, void* data) {
@@ -214,19 +246,27 @@ static void empty_range(cl_context ctx,cl_device_id device,cl_program program) {
 
 int main(int argc,char** argv) {
     std::setvbuf(stdout,nullptr,_IONBF,0);
-    unsigned budget=7;bool any=false;
+    unsigned budget=7;bool any=false,environment_only=false;
     for(int i=1;i<argc;++i) {
         if(!std::strcmp(argv[i],"--help")) {
-            std::puts("Candidate tiled semantics: --groups 0..65535 (default7), --any-device (explicit CI software allowance). Builtin IDs/sizes/offsets, nonuniform tails, barrier+atomics, subbuffer canaries, argument lifetime, events/profiling and imported uniform binary control. No benchmark claim.");return 0;
+            std::puts("Candidate tiled semantics: --groups 0..65535 (default7), --any-device (explicit CI software allowance), --check-environment (no GPU; inherited process setting). Builtin IDs/sizes/offsets, nonuniform tails, barrier+atomics, subbuffer canaries, argument lifetime, events/profiling and imported uniform binary control. No benchmark claim.");return 0;
         }
         if(!std::strcmp(argv[i],"--any-device")) any=true;
+        else if(!std::strcmp(argv[i],"--check-environment")) environment_only=true;
         else if(!std::strcmp(argv[i],"--groups")&&i+1<argc) {
             char* end=nullptr;auto n=std::strtoul(argv[++i],&end,10);
             if(!*argv[i]||*end||n>65535)return 2;
             budget=unsigned(n);
         } else return 2;
     }
-    env("CLVK_MAX_DISPATCH_WORKGROUPS",std::to_string(budget).c_str());
+    const int child=prepare_budget(budget);
+    if(child>=0) return child;
+    if(environment_only) {
+        require(std::getenv("CLVK_MAX_DISPATCH_WORKGROUPS")&&
+                std::to_string(budget)==std::getenv("CLVK_MAX_DISPATCH_WORKGROUPS"),"effective environment budget");
+        std::printf("PASS inherited tile environment groups=%u bits=%zu; no GPU calls\n",budget,sizeof(void*)*8);
+        return 0;
+    }
     cl_uint count=0;check(clGetPlatformIDs(0,nullptr,&count),"platform count");
     std::vector<cl_platform_id> platforms(count);check(clGetPlatformIDs(count,platforms.data(),nullptr),"platforms");
     cl_device_id device=nullptr;

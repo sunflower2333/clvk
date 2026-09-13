@@ -189,6 +189,9 @@ jobs:
             if ($LASTEXITCODE) { throw 'Production tile coverage/provenance/lifecycle failed' }
             & build/package/viogpu-opencl-tile-check-${{ matrix.arch }}.exe --help
             if ($LASTEXITCODE) { throw 'Vendor tile control CLI failed' }
+            Remove-Item Env:CLVK_MAX_DISPATCH_WORKGROUPS -ErrorAction SilentlyContinue
+            & build/package/viogpu-opencl-tile-check-${{ matrix.arch }}.exe --check-environment --groups 7
+            if ($LASTEXITCODE) { throw 'Vendor tile inherited-environment control failed' }
             & build/package/viogpu-opencl-dispatch-check-${{ matrix.arch }}.exe --help
             if ($LASTEXITCODE) { throw 'Vendor dispatch control CLI failed' }
           }
@@ -238,6 +241,9 @@ jobs:
             if ($LASTEXITCODE) { throw "Native/emulated $arch production tiles failed" }
             & "artifacts/viogpu-opencl-$arch/package/viogpu-opencl-tile-check-$arch.exe" --help
             if ($LASTEXITCODE) { throw "Native/emulated $arch tile control CLI failed" }
+            Remove-Item Env:CLVK_MAX_DISPATCH_WORKGROUPS -ErrorAction SilentlyContinue
+            & "artifacts/viogpu-opencl-$arch/package/viogpu-opencl-tile-check-$arch.exe" --check-environment --groups 7
+            if ($LASTEXITCODE) { throw "Native/emulated $arch inherited-environment control failed" }
             & "artifacts/viogpu-opencl-$arch/package/viogpu-opencl-dispatch-check-$arch.exe" --help
             if ($LASTEXITCODE) { throw "Native/emulated $arch vendor control CLI failed" }
           }

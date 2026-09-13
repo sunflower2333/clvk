@@ -39,6 +39,9 @@ duration admission does not learn per-tile time as a full-command sample.
 
 `viogpu-opencl-tile-check-<arch>.exe --groups 7` is a private candidate-ICD control
 and requires its sibling runtime/compiler DLLs. It defaults to Adreno/Turnip;
+on Windows it relaunches with the chosen budget inherited before the ICD's
+static CRT initializes if the existing process setting differs. The non-GPU
+`--check-environment --groups 7` verifies that actual relaunch path in CI.
 `--any-device` explicitly permits a software Vulkan implementation for CI.
 It executes seven actual compiled-kernel cases: 1D/2D/3D nonuniform tails,
 ready-to-run 3D tiling, uniform source, uniform CLVK-container import and uniform
