@@ -1246,7 +1246,8 @@ cl_int cvk_command_kernel::build() {
         cvk_info("NDRANGE_TILE_BYPASS command=%p event=%p reason=%s",
                  (void*)this, (void*)event(),
                  m_kernel->program()->uses_printf() ? "shared_printf_buffer" :
-                                                     "unproven_region_abi");
+                 (!m_ndrange.gws[0] || !m_ndrange.gws[1] || !m_ndrange.gws[2]) ?
+                     "empty_ndrange" : "unproven_region_abi");
     }
     return cvk_command_batchable::build();
 }

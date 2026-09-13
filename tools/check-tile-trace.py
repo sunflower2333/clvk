@@ -10,6 +10,7 @@ p.add_argument("--groups", type=int, required=True)
 a = p.parse_args()
 data = a.log.read_text(errors="replace")
 assert re.search(r"PASS \d+ actual compiled-kernel", data), "semantic control did not pass"
+assert "EMPTY_PASS zero global size" in data, "empty NDRange no-work regression required"
 assert len(re.findall(r"^CASE_PASS ", data, re.M)) == 7, "seven actual semantic cases required"
 blocks = re.split(r"^CASE (\S+)[^\n]*\n", data, flags=re.M)
 total = 0

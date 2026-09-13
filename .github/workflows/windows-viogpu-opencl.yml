@@ -74,7 +74,12 @@ jobs:
           cmake --build build/linux --parallel 3 --target OpenCL
           g++ -std=c++17 -Wall -Wextra -Werror -Iexternal/OpenCL-Headers tools/viogpu-opencl-tile-check.cpp -Lbuild/linux -lOpenCL -Wl,-rpath,"$PWD/build/linux" -o build/viogpu-opencl-tile-check
           export CLVK_CLSPV_PATH="$PWD/build/upstream/clspv"
-          export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.x86_64.json
+          # Mesa 25 packages omit the older architecture suffix.
+          for tile_icd in /usr/share/vulkan/icd.d/lvp_icd.json /usr/share/vulkan/icd.d/lvp_icd.x86_64.json; do
+            if test -f "$tile_icd"; then export VK_ICD_FILENAMES="$tile_icd"; break; fi
+          done
+          test -f "$VK_ICD_FILENAMES"
+          cat "$VK_ICD_FILENAMES"
           export CLVK_DISPATCH_TRACE=1 CLVK_LOG=3 CLVK_LOG_COLOUR=0
           for budget in 0 1 7; do
             timeout 90 build/viogpu-opencl-tile-check --any-device --groups "$budget" > "build/tile-$budget.log" 2>&1 || { cat "build/tile-$budget.log"; exit 1; }

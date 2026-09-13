@@ -17,7 +17,7 @@ END query. The elapsed interval includes inter-tile gaps.
 Eligibility is explicitly captured from successful source-to-executable clspv
 generation with the known nonuniform region/global-offset mode and published
 only after executable validation. Imports, IR/link paths, unknown flags,
-uniform-only mode and programs using the queue's shared printf buffer use the
+uniform-only mode, empty NDRanges and shared printf-buffer programs use the
 unchanged execution path. Missing reflection constants are not treated as proof
 of imported ABI compatibility. CLVK v2 binaries lose uniform-only build options;
 supporting their import safely needs versioned ABI provenance or executable
@@ -42,7 +42,8 @@ and requires its sibling runtime/compiler DLLs. It defaults to Adreno/Turnip;
 `--any-device` explicitly permits a software Vulkan implementation for CI.
 It executes seven actual compiled-kernel cases: 1D/2D/3D nonuniform tails,
 ready-to-run 3D tiling, uniform source, uniform CLVK-container import and uniform
-raw SPIR-V import. It checks all ID/size/offset builtins, exact atomic histograms,
+raw SPIR-V import. It also verifies that an empty NDRange does no work.
+It checks all ID/size/offset builtins, exact atomic histograms,
 local barrier reduction, subbuffer canaries, argument mutation/reference release,
 user-event dependencies, one callback and monotonic profiling, plus negative
 dependencies without waiting nonexistent timestamps. The frozen compiler has an

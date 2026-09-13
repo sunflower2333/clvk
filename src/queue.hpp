@@ -839,6 +839,7 @@ struct cvk_command_kernel final : public cvk_command_batchable {
           m_dimensions(dims), m_ndrange(ndrange), m_pipeline(VK_NULL_HANDLE),
           m_argument_values(nullptr),
           m_tile_budget(kernel->program()->has_generated_region_abi() &&
+                            ndrange.gws[0] && ndrange.gws[1] && ndrange.gws[2] &&
                             !kernel->program()->uses_printf()
                             ? config.max_dispatch_workgroups() : 0) {}
 

@@ -192,6 +192,26 @@ static void run(cl_context ctx,cl_device_id device,cl_program program,
     std::printf("CASE_PASS %s pixels=%zu\n",label,n);
 }
 
+static void empty_range(cl_context ctx,cl_device_id device,cl_program program) {
+    cl_int status;
+    auto queue=clCreateCommandQueue(ctx,device,0,&status);check(status,"empty queue");
+    auto kernel=clCreateKernel(program,"tile_semantics",&status);check(status,"empty kernel");
+    std::array<cl_uint,8> words{};words.fill(0x12345678u);
+    auto buffer=clCreateBuffer(ctx,CL_MEM_READ_WRITE|CL_MEM_COPY_HOST_PTR,sizeof(words),words.data(),&status);check(status,"empty buffer");
+    check(clSetKernelArg(kernel,0,sizeof(buffer),&buffer),"empty output");
+    check(clSetKernelArg(kernel,1,sizeof(buffer),&buffer),"empty histogram");
+    check(clSetKernelArg(kernel,2,16*4,nullptr),"empty local");
+    cl_uint salt=3;check(clSetKernelArg(kernel,3,sizeof(salt),&salt),"empty scalar");
+    const size_t gws=0,lws=16;cl_event event=nullptr;
+    check(clEnqueueNDRangeKernel(queue,kernel,1,nullptr,&gws,&lws,0,nullptr,&event),"empty enqueue");
+    check(clWaitForEvents(1,&event),"empty complete");
+    check(clEnqueueReadBuffer(queue,buffer,CL_TRUE,0,sizeof(words),words.data(),0,nullptr,nullptr),"empty readback");
+    for(auto word:words) require(word==0x12345678u,"empty NDRange does no work");
+    check(clReleaseEvent(event),"release empty event");check(clReleaseMemObject(buffer),"release empty buffer");
+    check(clReleaseKernel(kernel),"release empty kernel");check(clReleaseCommandQueue(queue),"release empty queue");
+    std::puts("EMPTY_PASS zero global size keeps prior no-work path");
+}
+
 int main(int argc,char** argv) {
     std::setvbuf(stdout,nullptr,_IONBF,0);
     unsigned budget=7;bool any=false;
@@ -226,6 +246,7 @@ int main(int argc,char** argv) {
     require(device!=nullptr,"expected GPU device");
     cl_int status;auto ctx=clCreateContext(nullptr,1,&device,nullptr,nullptr,&status);check(status,"context");
     auto source=build(ctx,device,"-cl-std=CL3.0",false);
+    empty_range(ctx,device,source);
     run(ctx,device,source,1,{67,1,1},{16,1,1},"source-1d-tail");
     run(ctx,device,source,2,{17,7,1},{4,2,1},"source-2d-tails");
     run(ctx,device,source,3,{9,7,5},{4,2,2},"source-3d-tails");
