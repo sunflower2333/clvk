@@ -21,9 +21,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
-#include <initializer_list>
 #include <unordered_map>
-#include <utility>
 #include <vector>
 
 #ifdef _WIN32
@@ -471,18 +469,15 @@ void init_config() {
 #if CLVK_WINDOWS_FLAT_DRIVER
     // Registered applications run without CLVK_* policy variables. The VIOGPU
     // host fails a KGSL submission that outlives its fixed watchdog and cannot
-    // preempt a running dispatch, so bound source-generated NDRange geometry
-    // per submission and admit unknown kernels alone. An explicit environment
-    // or config-file value, including 0, keeps precedence.
-    for (const auto& [option, value] :
-         {std::pair<const config_value<uint32_t>*, uint32_t>{
-              &config.max_dispatch_workgroups, 4096u},
-          {&config.max_batch_duration_us, 100000u}}) {
-        if (!option->set) {
-            auto& writable = const_cast<config_value<uint32_t>&>(*option);
-            writable.value = value;
-            writable.set = true;
-        }
+    // preempt a running dispatch. Geekbench's Hough scores cost ~16ms per 1000
+    // workgroups on Adreno 830, so one 5600x4200 NDRange runs ~18s untiled; a
+    // 16384-group tile stays near 260ms. An explicit environment or config-file
+    // value, including 0, keeps precedence.
+    if (!config.max_dispatch_workgroups.set) {
+        auto& option =
+            const_cast<config_value<uint32_t>&>(config.max_dispatch_workgroups);
+        option.value = 16384u;
+        option.set = true;
     }
 #endif
     print_config();
