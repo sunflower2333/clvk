@@ -31,8 +31,11 @@ static uint64_t oracle_scaled(uint64_t elapsed, uint64_t items) {
     return s / items + (s % items != 0);
 }
 
+// File scope: MSVC does not treat enclosing-function constants as constant
+// expressions inside capturing lambdas (C2131).
+static constexpr uint64_t ms = 1000000, target = 100 * ms;
+
 int main() {
-    constexpr uint64_t ms = 1000000, target = 100 * ms;
     std::array<uint32_t, 3> gws{65536, 1, 1}, lws{64, 1, 1};
 
     // Unknown shapes keep the geometry policy and ordinary batching.
