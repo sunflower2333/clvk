@@ -181,6 +181,11 @@ OPTION(bool, dynamic_batches, false)
 // This is conservative batch admission, not a GPU timeout or preemption bound.
 OPTION(uint32_t, max_batch_duration_us, 0u)
 
+// Opt-in whole-workgroup budget per independently retired kernel submission.
+// Known source-generated region ABI only; imported executables use old path.
+// Zero disables tiling. This is a geometry bound, not a time/preemption limit.
+OPTION(uint32_t, max_dispatch_workgroups, 0u)
+
 // Specify the number of instances of a kernel that can be in flight at the
 // same time. Increasing this value has an impact on the memory usage as it
 // will allocate more descriptor sets per kernel.

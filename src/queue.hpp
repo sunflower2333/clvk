@@ -729,7 +729,7 @@ struct cvk_command_batchable : public cvk_command {
     CHECK_RETURN cl_int get_timestamp_query_results(cl_ulong* start,
                                                     cl_ulong* end);
 
-    CHECK_RETURN cl_int build();
+    CHECK_RETURN virtual cl_int build();
     CHECK_RETURN cl_int build(cvk_command_buffer& cmdbuf);
     CHECK_RETURN virtual cl_int
     build_batchable_inner(cvk_command_buffer& cmdbuf) = 0;
@@ -782,7 +782,9 @@ struct cvk_command_batchable : public cvk_command {
         }
     }
 
-private:
+protected:
+    virtual bool first_recording() const { return true; }
+    virtual bool last_recording() const { return true; }
     virtual std::shared_ptr<cvk_batch_cost> find_batch_cost() { return {}; }
     CHECK_RETURN virtual cl_int do_post_action() { return CL_SUCCESS; }
     CHECK_RETURN cl_int do_action() override;
@@ -835,7 +837,10 @@ struct cvk_command_kernel final : public cvk_command_batchable {
                        const cvk_ndrange& ndrange)
         : cvk_command_batchable(CL_COMMAND_NDRANGE_KERNEL, q), m_kernel(kernel),
           m_dimensions(dims), m_ndrange(ndrange), m_pipeline(VK_NULL_HANDLE),
-          m_argument_values(nullptr) {}
+          m_argument_values(nullptr),
+          m_tile_budget(kernel->program()->has_generated_region_abi() &&
+                            !kernel->program()->uses_printf()
+                            ? config.max_dispatch_workgroups() : 0) {}
 
     ~cvk_command_kernel() {
         if (m_argument_values) {
@@ -845,9 +850,10 @@ struct cvk_command_kernel final : public cvk_command_batchable {
 
     CHECK_RETURN cl_int
     build_batchable_inner(cvk_command_buffer& cmdbuf) override final;
+    CHECK_RETURN cl_int build() override;
 
     bool can_be_batched() const override final {
-        return !m_kernel->uses_printf() &&
+        return !m_tile_budget && !m_kernel->uses_printf() &&
                cvk_command_batchable::can_be_batched();
     }
 
@@ -861,6 +867,10 @@ struct cvk_command_kernel final : public cvk_command_batchable {
     }
 
 private:
+    bool first_recording() const override { return !m_tile_budget || m_tile_first; }
+    bool last_recording() const override { return !m_tile_budget || !m_tiles.has_next(); }
+    CHECK_RETURN cl_int do_action() override;
+    CHECK_RETURN cl_int prepare_arguments();
     std::shared_ptr<cvk_batch_cost> find_batch_cost() override final;
     void capture_dispatch_arguments();
     CHECK_RETURN cl_int do_post_action() override final;
@@ -884,6 +894,11 @@ private:
     VkPipeline m_pipeline;
     std::shared_ptr<cvk_kernel_argument_values> m_argument_values;
     std::shared_ptr<const cvk_dispatch_arguments> m_trace_arguments;
+    uint32_t m_tile_budget;
+    bool m_tile_first = true;
+    uint64_t m_tile_ordinal = 0;
+    cvk_ndrange_tiles m_tiles;
+    cvk_ndrange_tile m_tile;
 };
 
 struct cvk_command_batch : public cvk_command {

@@ -1118,8 +1118,9 @@ cl_int cvk_command_kernel::build_and_dispatch_regions(
     return CL_SUCCESS;
 }
 
-cl_int
-cvk_command_kernel::build_batchable_inner(cvk_command_buffer& command_buffer) {
+cl_int cvk_command_kernel::prepare_arguments() {
+
+    if (m_argument_values) return CL_SUCCESS;
 
     // TODO check against the size specified at compile time, if any
     // TODO CL_INVALID_KERNEL_ARGS if the kernel argument values have not been
@@ -1170,7 +1171,16 @@ cvk_command_kernel::build_batchable_inner(cvk_command_buffer& command_buffer) {
         }
     }
 
-    // Bind descriptors and update push constants
+    capture_dispatch_arguments();
+    return CL_SUCCESS;
+}
+
+cl_int
+cvk_command_kernel::build_batchable_inner(cvk_command_buffer& command_buffer) {
+    auto err = prepare_arguments();
+    if (err != CL_SUCCESS) return err;
+
+    // Bind descriptors and update push constants for every command buffer.
     if (m_kernel->num_set_layouts() > 0) {
         vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE,
                                 m_kernel->pipeline_layout(), 0,
@@ -1178,14 +1188,21 @@ cvk_command_kernel::build_batchable_inner(cvk_command_buffer& command_buffer) {
                                 m_argument_values->descriptor_sets(), 0, 0);
     }
 
-    auto err = update_global_push_constants(command_buffer);
+    err = update_global_push_constants(command_buffer);
     if (err != CL_SUCCESS) {
         return err;
     }
 
     // Dispatch work
-    capture_dispatch_arguments();
-    err = build_and_dispatch_regions(command_buffer);
+    if (m_tile_budget) {
+        cvk_ndrange region;
+        region.offset = m_tile.offset;
+        region.gws = m_tile.gws;
+        region.lws = m_tile.lws;
+        err = dispatch_uniform_region_within_vklimits(region, command_buffer);
+    } else {
+        err = build_and_dispatch_regions(command_buffer);
+    }
     if (err != CL_SUCCESS) {
         return err;
     }
@@ -1215,6 +1232,46 @@ cvk_command_kernel::build_batchable_inner(cvk_command_buffer& command_buffer) {
         nullptr); // pImageMemoryBarriers
 
     return CL_SUCCESS;
+}
+
+cl_int cvk_command_kernel::build() {
+    if (m_tile_budget) {
+        const auto* limits = m_queue->device()->vulkan_limits().maxComputeWorkGroupCount;
+        if (!m_tiles.init(m_ndrange.offset, m_ndrange.gws, m_ndrange.lws,
+                          {limits[0], limits[1], limits[2]}, m_tile_budget) ||
+            !m_tiles.next(m_tile)) return CL_INVALID_GLOBAL_WORK_SIZE;
+        m_tile_first = true;
+        m_tile_ordinal = 0;
+    } else if (config.max_dispatch_workgroups) {
+        cvk_info("NDRANGE_TILE_BYPASS command=%p event=%p reason=%s",
+                 (void*)this, (void*)event(),
+                 m_kernel->program()->uses_printf() ? "shared_printf_buffer" :
+                                                     "unproven_region_abi");
+    }
+    return cvk_command_batchable::build();
+}
+
+cl_int cvk_command_kernel::do_action() {
+    if (!m_tile_budget) return cvk_command_batchable::do_action();
+    return cvk_run_tile_submissions(
+        [&]() -> int {
+            ++m_tile_ordinal;
+            if (config.dispatch_trace) {
+                cvk_info("NDRANGE_TILE_SUBMIT command=%p event=%p tile=%llu budget=%u first=%u last=%u",
+                         (void*)this, (void*)event(),
+                         (unsigned long long)m_tile_ordinal, m_tile_budget,
+                         unsigned(first_recording()), unsigned(last_recording()));
+                cvk_log_flush();
+            }
+            return m_command_buffer->submit_and_wait() ? CL_SUCCESS : CL_OUT_OF_RESOURCES;
+        },
+        [&](bool& more) -> int {
+            more = m_tiles.next(m_tile);
+            if (!more) return CL_SUCCESS;
+            m_tile_first = false;
+            return cvk_command_batchable::build();
+        },
+        [&]() -> int { return do_post_action(); });
 }
 
 void cvk_command_kernel::capture_dispatch_arguments() {
@@ -1256,6 +1313,7 @@ void cvk_command_kernel::capture_dispatch_arguments() {
 }
 
 std::shared_ptr<cvk_batch_cost> cvk_command_kernel::find_batch_cost() {
+    if (m_tile_budget) return {};
     cvk_batch_cost_key key;
     key.value(m_dimensions);
     for (auto value : m_ndrange.gws) key.value(value);
@@ -1311,6 +1369,7 @@ cl_int cvk_command_batchable::build() {
         return CL_OUT_OF_RESOURCES;
     }
 
+    cvk_command_pool_lock_holder lock(m_queue);
     cl_int err = build(*m_command_buffer);
     if (err != CL_SUCCESS) {
         return err;
@@ -1338,7 +1397,8 @@ cl_int cvk_command_batchable::build(cvk_command_buffer& command_buffer) {
 
     bool profiling = m_queue->has_property(CL_QUEUE_PROFILING_ENABLE);
 
-    if (profiling && m_queue->profiling_on_device()) {
+    if (profiling && m_queue->profiling_on_device() &&
+        m_query_pool == VK_NULL_HANDLE) {
         auto vkdev = m_queue->device()->vulkan_device();
         auto res = vkCreateQueryPool(vkdev, &query_pool_create_info, nullptr,
                                      &m_query_pool);
@@ -1348,7 +1408,7 @@ cl_int cvk_command_batchable::build(cvk_command_buffer& command_buffer) {
     }
 
     // Sample timestamp if profiling
-    if (profiling && m_queue->profiling_on_device()) {
+    if (profiling && m_queue->profiling_on_device() && first_recording()) {
         vkCmdResetQueryPool(command_buffer, m_query_pool, 0,
                             NUM_POOL_QUERIES_PER_COMMAND);
         vkCmdWriteTimestamp(command_buffer,
@@ -1363,7 +1423,7 @@ cl_int cvk_command_batchable::build(cvk_command_buffer& command_buffer) {
     if (auto* trace = command_buffer.dispatch_trace()) trace->command();
 
     // Sample timestamp if profiling
-    if (profiling && m_queue->profiling_on_device()) {
+    if (profiling && m_queue->profiling_on_device() && last_recording()) {
         vkCmdWriteTimestamp(command_buffer,
                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, m_query_pool,
                             POOL_QUERY_CMD_END);

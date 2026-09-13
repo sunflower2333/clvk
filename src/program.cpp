@@ -1583,6 +1583,9 @@ cl_build_status cvk_program::do_build_inner(const cvk_device* device) {
         m_binary_type = CL_PROGRAM_BINARY_TYPE_LIBRARY;
     } else {
         m_binary_type = CL_PROGRAM_BINARY_TYPE_EXECUTABLE;
+        m_region_abi.generated(!m_source.empty() &&
+                                   m_operation == build_operation::build,
+                               build_options);
     }
 
 #endif // #if !COMPILER_AVAILABLE
@@ -1672,6 +1675,7 @@ bool cvk_program::check_capabilities(const cvk_device* device) {
 }
 
 void cvk_program::do_build() {
+    m_region_abi.reset();
     // Destroy entry points from previous build
     m_entry_points.clear();
 
@@ -1785,6 +1789,7 @@ void cvk_program::do_build() {
         return;
     }
 
+    m_region_abi.validated();
     complete_operation(device, CL_BUILD_SUCCESS);
 }
 

@@ -14,6 +14,8 @@
 
 #pragma once
 
+#include "ndrange_tiles.hpp"
+
 #include <array>
 #include <atomic>
 #include <climits>
@@ -892,6 +894,7 @@ struct cvk_program : public _cl_program, api_object<object_magic::program> {
 
     unsigned num_kernels() const { return m_binary.num_kernels(); }
     bool loaded_from_binary() const { return m_binary.loaded_from_binary(); }
+    bool has_generated_region_abi() const { return m_region_abi.supported(); }
     bool uses_printf() { return !m_binary.printf_descriptors().empty(); }
     const std::unordered_map<uint32_t, printf_descriptor>&
     printf_descriptors() {
@@ -1109,6 +1112,7 @@ private:
     std::mutex m_lock;
     std::unique_ptr<std::thread> m_thread;
     std::string m_source;
+    cvk_region_abi m_region_abi;
     std::vector<uint8_t> m_ir;
     std::vector<uint8_t> m_il;
     VkShaderModule m_shader_module;
