@@ -193,6 +193,11 @@ cl_int cvk_command_queue::enqueue_command(cvk_command* cmd, _cl_event** event) {
                 if ((err = end_current_command_batch()) != CL_SUCCESS) return err;
             }
         }
+        if (config.max_dispatch_duration_us && m_command_batch &&
+            !m_command_batch->accepts_dispatch_estimate(
+                batchable->dispatch_estimate_ns())) {
+            if ((err = end_current_command_batch()) != CL_SUCCESS) return err;
+        }
         if (!m_command_batch) {
             // Create a new command batch
             m_command_batch = std::make_unique<cvk_command_batch>(this);
@@ -612,7 +617,8 @@ bool cvk_command_buffer::begin() {
 bool cvk_command_buffer::submit_and_wait() {
     auto& queue = m_queue->vulkan_queue();
     const auto* trace = m_dispatch_trace.get();
-    const bool time_submission = trace || config.max_batch_duration_us;
+    const bool time_submission = trace || config.max_batch_duration_us ||
+                                 config.max_dispatch_duration_us;
     uint64_t started = time_submission ? cvk_dispatch_trace::monotonic_ns() : 0;
     if (trace) {
         cvk_info("DISPATCH_SUBMIT_BEGIN id=%llu mono_ns=%llu utc_ns=%llu cl_queue=%p vk_queue=%p cmdbuf=%p commands=%llu dispatches=%llu matched=%llu retained=%llu",
@@ -1242,6 +1248,15 @@ cl_int cvk_command_kernel::build() {
             !m_tiles.next(m_tile)) return CL_INVALID_GLOBAL_WORK_SIZE;
         m_tile_first = true;
         m_tile_ordinal = 0;
+        if (m_duration_tiled && m_dispatch_cost->first_report(m_tile_budget)) {
+            cvk_warn("NDRANGE_DURATION_TILES kernel=%s gws={%u,%u,%u} lws={%u,%u,%u} estimate_ns=%llu target_ns=%llu budget=%u",
+                     m_kernel->name().c_str(), m_ndrange.gws[0], m_ndrange.gws[1],
+                     m_ndrange.gws[2], m_ndrange.lws[0], m_ndrange.lws[1],
+                     m_ndrange.lws[2],
+                     (unsigned long long)dispatch_estimate_ns(),
+                     (unsigned long long)config.max_dispatch_duration_us() * 1000,
+                     m_tile_budget);
+        }
     } else if (config.max_dispatch_workgroups) {
         cvk_info("NDRANGE_TILE_BYPASS command=%p event=%p reason=%s",
                  (void*)this, (void*)event(),
@@ -1266,7 +1281,12 @@ cl_int cvk_command_kernel::do_action() {
                          unsigned(first_recording()), unsigned(last_recording()));
                 cvk_log_flush();
             }
-            return m_command_buffer->submit_and_wait() ? CL_SUCCESS : CL_OUT_OF_RESOURCES;
+            if (!m_command_buffer->submit_and_wait()) return CL_OUT_OF_RESOURCES;
+            // Each tile is its own submission, so its time is attributable.
+            if (m_dispatch_cost)
+                m_dispatch_cost->observe(m_command_buffer->elapsed_ns(),
+                                         cvk_ndrange_items(m_tile.gws));
+            return CL_SUCCESS;
         },
         [&](bool& more) -> int {
             more = m_tiles.next(m_tile);
@@ -1315,18 +1335,15 @@ void cvk_command_kernel::capture_dispatch_arguments() {
     m_trace_arguments = std::move(metadata);
 }
 
-std::shared_ptr<cvk_batch_cost> cvk_command_kernel::find_batch_cost() {
-    if (m_tile_budget) return {};
-    cvk_batch_cost_key key;
-    key.value(m_dimensions);
-    for (auto value : m_ndrange.gws) key.value(value);
-    for (auto value : m_ndrange.lws) key.value(value);
-    for (auto value : m_ndrange.offset) key.value(value);
-    const auto values = m_kernel->argument_values();
+// Kernel argument shape: kinds, local sizes and memory object geometry. Scalar
+// bytes are appended only when requested.
+static void append_argument_shape(cvk_batch_cost_key& key, cvk_kernel* kernel,
+                                  bool scalar_values) {
+    const auto values = kernel->argument_values();
     const auto* pod = values->pod_data_if_present();
     key.value(pod ? pod->size() : 0);
-    if (pod) key.append(pod->data(), pod->size());
-    for (const auto& arg : m_kernel->arguments()) {
+    if (pod && scalar_values) key.append(pod->data(), pod->size());
+    for (const auto& arg : kernel->arguments()) {
         key.value(uint32_t(arg.kind));
         if (arg.kind == kernel_argument_kind::local) {
             key.value(values->local_arg_size(arg.pos));
@@ -1347,7 +1364,52 @@ std::shared_ptr<cvk_batch_cost> cvk_command_kernel::find_batch_cost() {
             key.value(uintptr_t(values->get_arg_value(arg)));
         }
     }
+}
+
+std::shared_ptr<cvk_batch_cost> cvk_command_kernel::find_batch_cost() {
+    if (m_tile_budget) return {};
+    cvk_batch_cost_key key;
+    key.value(m_dimensions);
+    for (auto value : m_ndrange.gws) key.value(value);
+    for (auto value : m_ndrange.lws) key.value(value);
+    for (auto value : m_ndrange.offset) key.value(value);
+    append_argument_shape(key, m_kernel, true);
     return m_kernel->batch_cost(key);
+}
+
+// Cost is normalised per work item, so geometry and scalar values stay out of
+// the key: iteration counters would otherwise never repeat, and local-size
+// searches share one estimate. Scalars that change cost raise the peak.
+std::shared_ptr<cvk_dispatch_cost>
+cvk_command_kernel::find_dispatch_cost(cvk_kernel* kernel) {
+    if (!config.max_dispatch_duration_us) return {};
+    cvk_batch_cost_key key;
+    append_argument_shape(key, kernel, false);
+    return kernel->dispatch_cost(key);
+}
+
+uint32_t cvk_command_kernel::initial_tile_budget(cvk_kernel* kernel,
+                                                const cvk_ndrange& ndrange,
+                                                const cvk_dispatch_cost* cost,
+                                                bool& duration_tiled) {
+    duration_tiled = false;
+    if (!kernel->program()->has_generated_region_abi() ||
+        kernel->program()->uses_printf())
+        return 0;
+    return cvk_select_tile_budget(
+        ndrange.gws, ndrange.lws, config.max_dispatch_workgroups(), cost,
+        uint64_t(config.max_dispatch_duration_us()) * 1000, &duration_tiled);
+}
+
+void cvk_command_kernel::observe_submission(uint64_t elapsed_ns,
+                                            size_t commands) {
+    if (!m_dispatch_cost) return;
+    // A shared submission within the target cannot identify a slow command.
+    // One beyond it attributes the whole time to each command: an upper bound.
+    if (commands > 1 &&
+        elapsed_ns <= uint64_t(config.max_dispatch_duration_us()) * 1000)
+        return;
+    m_dispatch_cost->observe(elapsed_ns, cvk_ndrange_items(m_ndrange.gws));
 }
 
 cl_int cvk_command_kernel::do_post_action() {
@@ -1476,6 +1538,7 @@ cl_int cvk_command_batchable::do_action() {
     if (!success) {
         return CL_OUT_OF_RESOURCES;
     }
+    observe_submission(m_command_buffer->elapsed_ns(), 1);
 
     return do_post_action();
 }
@@ -1515,6 +1578,9 @@ cl_int cvk_command_batch::do_action() {
     if (!success) {
         return CL_OUT_OF_RESOURCES;
     }
+    for (const auto& command : m_commands)
+        command->observe_submission(m_command_buffer->elapsed_ns(),
+                                    m_commands.size());
 
     m_queue->batch_completed();
 

@@ -741,6 +741,13 @@ struct cvk_command_batchable : public cvk_command {
     uint64_t admission_cost() const { return m_admission_cost; }
     const std::shared_ptr<cvk_batch_cost>& batch_cost() const { return m_batch_cost; }
 
+    // Per-submission duration tiling. Estimates are 0 when unknown.
+    virtual uint64_t dispatch_estimate_ns() const { return 0; }
+    virtual void observe_submission(uint64_t elapsed_ns, size_t commands) {
+        (void)elapsed_ns;
+        (void)commands;
+    }
+
     CHECK_RETURN cl_int set_profiling_info_end() {
         // If it has already been set, don't override it
         if (m_event->get_profiling_info(CL_PROFILING_COMMAND_END) != 0) {
@@ -831,12 +838,10 @@ struct cvk_command_kernel final : public cvk_command_batchable {
         : cvk_command_batchable(CL_COMMAND_NDRANGE_KERNEL, q), m_kernel(kernel),
           m_dimensions(dims), m_ndrange(ndrange), m_pipeline(VK_NULL_HANDLE),
           m_argument_values(nullptr),
-          m_tile_budget(kernel->program()->has_generated_region_abi() &&
-                            !kernel->program()->uses_printf() &&
-                            cvk_ndrange_exceeds_workgroup_budget(
-                                ndrange.gws, ndrange.lws,
-                                config.max_dispatch_workgroups())
-                            ? config.max_dispatch_workgroups() : 0) {}
+          m_dispatch_cost(find_dispatch_cost(kernel)),
+          m_tile_budget(initial_tile_budget(kernel, ndrange,
+                                            m_dispatch_cost.get(),
+                                            m_duration_tiled)) {}
 
     ~cvk_command_kernel() {
         if (m_argument_values) {
@@ -853,6 +858,13 @@ struct cvk_command_kernel final : public cvk_command_batchable {
                cvk_command_batchable::can_be_batched();
     }
 
+    uint64_t dispatch_estimate_ns() const override final {
+        return m_dispatch_cost
+                   ? m_dispatch_cost->estimate_ns(cvk_ndrange_items(m_ndrange.gws))
+                   : 0;
+    }
+    void observe_submission(uint64_t elapsed_ns, size_t commands) override final;
+
     const std::vector<cvk_mem*> memory_objects() const override {
         std::vector<cvk_mem*> ret;
         std::shared_ptr<cvk_kernel_argument_values> argvals = m_argument_values;
@@ -868,6 +880,11 @@ private:
     CHECK_RETURN cl_int do_action() override;
     CHECK_RETURN cl_int prepare_arguments();
     std::shared_ptr<cvk_batch_cost> find_batch_cost() override final;
+    static std::shared_ptr<cvk_dispatch_cost> find_dispatch_cost(cvk_kernel* kernel);
+    static uint32_t initial_tile_budget(cvk_kernel* kernel,
+                                        const cvk_ndrange& ndrange,
+                                        const cvk_dispatch_cost* cost,
+                                        bool& duration_tiled);
     void capture_dispatch_arguments();
     CHECK_RETURN cl_int do_post_action() override final;
 
@@ -890,6 +907,9 @@ private:
     VkPipeline m_pipeline;
     std::shared_ptr<cvk_kernel_argument_values> m_argument_values;
     std::shared_ptr<const cvk_dispatch_arguments> m_trace_arguments;
+    // Declared before m_tile_budget: both initialise it.
+    bool m_duration_tiled = false;
+    std::shared_ptr<cvk_dispatch_cost> m_dispatch_cost;
     uint32_t m_tile_budget;
     bool m_tile_first = true;
     uint64_t m_tile_ordinal = 0;
@@ -900,9 +920,13 @@ private:
 struct cvk_command_batch : public cvk_command {
     cvk_command_batch(cvk_command_queue* queue)
         : cvk_command(CLVK_COMMAND_BATCH, queue),
-          m_duration_window(uint64_t(config.max_batch_duration_us()) * 1000) {}
+          m_duration_window(uint64_t(config.max_batch_duration_us()) * 1000),
+          m_dispatch_window(uint64_t(config.max_dispatch_duration_us()) * 1000) {}
 
     bool accepts_cost(uint64_t cost) const { return m_duration_window.accepts(cost); }
+    bool accepts_dispatch_estimate(uint64_t estimate) const {
+        return m_dispatch_window.accepts(estimate);
+    }
     bool duration_limit_reached() const { return m_duration_window.full(); }
 
     cl_int add_command(cvk_command_batchable* cmd) {
@@ -924,6 +948,8 @@ struct cvk_command_batch : public cvk_command {
                      cl_command_type_to_string(cmd->type()), this);
         m_commands.emplace_back(cmd);
         if (m_duration_window.budget_ns) m_duration_window.add(cmd->admission_cost());
+        if (m_dispatch_window.target_ns)
+            m_dispatch_window.add(cmd->dispatch_estimate_ns());
 
         return ret;
     }
@@ -977,6 +1003,7 @@ private:
     std::vector<std::unique_ptr<cvk_command_batchable>> m_commands;
     std::unique_ptr<cvk_command_buffer> m_command_buffer;
     cvk_batch_duration_window m_duration_window;
+    cvk_dispatch_duration_window m_dispatch_window;
 };
 
 struct cvk_command_map_buffer final : public cvk_command_buffer_base_region {

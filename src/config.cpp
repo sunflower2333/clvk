@@ -479,6 +479,15 @@ void init_config() {
         option.value = 16384u;
         option.set = true;
     }
+    // Adreno 830 also raises GMU hardware-hang faults on ~665ms Particle
+    // Physics/Fluid Simulation dispatches whose workgroups fit the geometry
+    // budget. Tile measured shapes to ~100ms per submission.
+    if (!config.max_dispatch_duration_us.set) {
+        auto& option =
+            const_cast<config_value<uint32_t>&>(config.max_dispatch_duration_us);
+        option.value = 100000u;
+        option.set = true;
+    }
 #endif
     print_config();
 }

@@ -23,6 +23,8 @@ jobs:
           ./ndrange-tiles-check
           clang++ -std=c++17 -g -O1 -Wall -Wextra -Werror -fsanitize=address,undefined tools/calibrated-clock-check.cpp -o calibrated-clock-check
           ./calibrated-clock-check
+          clang++ -std=c++17 -g -O1 -Wall -Wextra -Werror -fsanitize=address,undefined -pthread tools/dispatch-duration-check.cpp -o dispatch-duration-check
+          ./dispatch-duration-check
   compiler:
     runs-on: windows-2022
     steps:
@@ -91,6 +93,11 @@ jobs:
             timeout 90 build/viogpu-opencl-tile-check --any-device --groups "$budget" > "build/tile-$budget.log" 2>&1 || { cat "build/tile-$budget.log"; exit 1; }
             python3 tools/check-tile-trace.py "build/tile-$budget.log" --groups "$budget"
           done
+          # A 1us target tiles every remeasured multi-group shape to single
+          # workgroups. All functional assertions must still pass unchanged.
+          CLVK_MAX_DISPATCH_DURATION_US=1 timeout 180 build/viogpu-opencl-tile-check --any-device --groups 0 > build/tile-duration.log 2>&1 || { cat build/tile-duration.log; exit 1; }
+          grep -q 'NDRANGE_DURATION_TILES' build/tile-duration.log || { cat build/tile-duration.log; echo 'Duration tiling never engaged'; exit 1; }
+          grep -c 'NDRANGE_TILE_SUBMIT' build/tile-duration.log
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -169,6 +176,8 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           cl /nologo /EHsc /std:c++17 /MT /DWIN32 /DNOMINMAX tools/batch-duration-check.cpp /Febuild/package/batch-duration-check-${{ matrix.arch }}.exe /link /MANIFEST:EMBED "/MANIFESTUAC:level='asInvoker' uiAccess='false'"
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cl /nologo /EHsc /std:c++17 /MT /DWIN32 /DNOMINMAX tools/dispatch-duration-check.cpp /Febuild/package/dispatch-duration-check-${{ matrix.arch }}.exe /link /MANIFEST:EMBED "/MANIFESTUAC:level='asInvoker' uiAccess='false'"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
           cl /nologo /EHsc /std:c++17 /MT /DWIN32 /DNOMINMAX tools/ndrange-tiles-check.cpp /Febuild/package/ndrange-tiles-check-${{ matrix.arch }}.exe /link /MANIFEST:EMBED "/MANIFESTUAC:level='asInvoker' uiAccess='false'"
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           cl /nologo /EHsc /std:c++17 /MT /DWIN32 /DNOMINMAX tools/calibrated-clock-check.cpp /Febuild/package/calibrated-clock-check-${{ matrix.arch }}.exe /link /MANIFEST:EMBED "/MANIFESTUAC:level='asInvoker' uiAccess='false'"
@@ -193,6 +202,8 @@ jobs:
             if ($LASTEXITCODE) { throw 'Production recorder failed' }
             & build/package/batch-duration-check-${{ matrix.arch }}.exe
             if ($LASTEXITCODE) { throw 'Production duration admission failed' }
+            & build/package/dispatch-duration-check-${{ matrix.arch }}.exe
+            if ($LASTEXITCODE) { throw 'Production dispatch duration tiling failed' }
             & build/package/ndrange-tiles-check-${{ matrix.arch }}.exe
             if ($LASTEXITCODE) { throw 'Production tile coverage/provenance/lifecycle failed' }
             & build/package/calibrated-clock-check-${{ matrix.arch }}.exe
@@ -247,6 +258,8 @@ jobs:
             if ($LASTEXITCODE) { throw "Native/emulated $arch production recorder failed" }
             & "artifacts/viogpu-opencl-$arch/package/batch-duration-check-$arch.exe"
             if ($LASTEXITCODE) { throw "Native/emulated $arch production duration admission failed" }
+            & "artifacts/viogpu-opencl-$arch/package/dispatch-duration-check-$arch.exe"
+            if ($LASTEXITCODE) { throw "Native/emulated $arch production dispatch duration tiling failed" }
             & "artifacts/viogpu-opencl-$arch/package/ndrange-tiles-check-$arch.exe"
             if ($LASTEXITCODE) { throw "Native/emulated $arch production tiles failed" }
             & "artifacts/viogpu-opencl-$arch/package/calibrated-clock-check-$arch.exe"

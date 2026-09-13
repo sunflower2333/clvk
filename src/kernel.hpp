@@ -23,6 +23,7 @@
 
 #include "memory.hpp"
 #include "batch_duration.hpp"
+#include "dispatch_duration.hpp"
 #include "objects.hpp"
 #include "program.hpp"
 
@@ -36,6 +37,8 @@ struct cvk_kernel : public _cl_kernel, api_object<object_magic::kernel> {
           m_image_metadata(nullptr) {
         if (config.max_batch_duration_us)
             m_batch_costs = std::make_unique<cvk_batch_cost_cache>();
+        if (config.max_dispatch_duration_us)
+            m_dispatch_costs = std::make_unique<cvk_dispatch_cost_cache>();
     }
 
     CHECK_RETURN cl_int init();
@@ -88,6 +91,10 @@ struct cvk_kernel : public _cl_kernel, api_object<object_magic::kernel> {
 
     std::shared_ptr<cvk_batch_cost> batch_cost(const cvk_batch_cost_key& key) {
         return m_batch_costs ? m_batch_costs->find(key) : nullptr;
+    }
+    std::shared_ptr<cvk_dispatch_cost>
+    dispatch_cost(const cvk_batch_cost_key& key) {
+        return m_dispatch_costs ? m_dispatch_costs->find(key) : nullptr;
     }
 
     kernel_argument_kind arg_kind(int index) const {
@@ -175,6 +182,7 @@ private:
     const kernel_sampler_metadata_map* m_sampler_metadata;
     const kernel_image_metadata_map* m_image_metadata;
     std::unique_ptr<cvk_batch_cost_cache> m_batch_costs;
+    std::unique_ptr<cvk_dispatch_cost_cache> m_dispatch_costs;
 };
 
 static inline cvk_kernel* icd_downcast(cl_kernel kernel) {
