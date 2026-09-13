@@ -1247,7 +1247,9 @@ cl_int cvk_command_kernel::build() {
                  (void*)this, (void*)event(),
                  m_kernel->program()->uses_printf() ? "shared_printf_buffer" :
                  (!m_ndrange.gws[0] || !m_ndrange.gws[1] || !m_ndrange.gws[2]) ?
-                     "empty_ndrange" : "unproven_region_abi");
+                     "empty_ndrange" :
+                 !m_kernel->program()->has_generated_region_abi() ?
+                     "unproven_region_abi" : "within_workgroup_budget");
     }
     return cvk_command_batchable::build();
 }

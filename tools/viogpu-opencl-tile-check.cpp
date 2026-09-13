@@ -97,6 +97,11 @@ __kernel void tile_semantics(__global uint* output, __global uint* histogram,
         atomic_add(histogram+7,sum);
     }
 }
+__kernel void batch_order(__global uint* output, uint salt) {
+    size_t i=get_global_linear_id();
+    output[i]=output[i]*1664525u+1013904223u+salt+
+              (uint)get_group_id(0)+(uint)get_num_groups(0);
+}
 )CLC";
 
 static cl_program build(cl_context ctx, cl_device_id device, const char* options,
@@ -244,6 +249,68 @@ static void empty_range(cl_context ctx,cl_device_id device,cl_program program) {
     std::puts("EMPTY_PASS zero global size keeps prior no-work path");
 }
 
+// Same arguments and geometry train the ordinary duration key once, then
+// enqueue twelve ready commands before a flush. The recurrence requires each
+// command's compute memory barrier and the original scalar snapshot to hold.
+// Submission traces establish actual shared buffers, not just absence of tiles.
+static void run_batch(cl_context ctx,cl_device_id device,cl_program program,
+                      size_t gws,const char* label) {
+    constexpr unsigned repeats=12;
+    constexpr cl_uint guard=0xcafef00du,salt=3;
+    const size_t lws=16,offset=13,groups=(gws+lws-1)/lws;
+    cl_int status;
+    auto queue=clCreateCommandQueue(ctx,device,CL_QUEUE_PROFILING_ENABLE,&status);check(status,"batch queue");
+    auto kernel=clCreateKernel(program,"batch_order",&status);check(status,"batch kernel");
+    std::vector<cl_uint> words(gws+8,guard);
+    auto buffer=clCreateBuffer(ctx,CL_MEM_READ_WRITE|CL_MEM_COPY_HOST_PTR,words.size()*4,words.data(),&status);check(status,"batch buffer");
+    check(clSetKernelArg(kernel,0,sizeof(buffer),&buffer),"batch buffer arg");
+    check(clSetKernelArg(kernel,1,sizeof(salt),&salt),"batch scalar arg");
+    std::printf("BATCH_CASE %s groups=%zu gws=%zu lws=%zu repeats=%u\n",label,groups,gws,lws,repeats);
+    cl_event warmup=nullptr;
+    check(clEnqueueNDRangeKernel(queue,kernel,1,&offset,&gws,&lws,0,nullptr,&warmup),"batch warmup enqueue");
+    check(clWaitForEvents(1,&warmup),"batch warmup wait");
+    check(clFinish(queue),"batch warmup duration sample");
+    std::array<cl_event,repeats> events{};
+    std::array<std::atomic<unsigned>,repeats> callbacks{};
+    for(unsigned i=0;i<repeats;++i) {
+        callbacks[i].store(0);
+        check(clEnqueueNDRangeKernel(queue,kernel,1,&offset,&gws,&lws,0,nullptr,&events[i]),"batch ready enqueue");
+        check(clSetEventCallback(events[i],CL_COMPLETE,callback,&callbacks[i]),"batch callback");
+    }
+    const cl_uint changed=99;
+    check(clSetKernelArg(kernel,1,sizeof(changed),&changed),"batch mutate scalar");
+    check(clReleaseKernel(kernel),"batch release retained kernel");
+    check(clFlush(queue),"batch flush ready commands");
+    check(clWaitForEvents(repeats,events.data()),"batch wait ready events");
+    check(clFinish(queue),"batch complete");
+    check(clEnqueueReadBuffer(queue,buffer,CL_TRUE,0,words.size()*4,words.data(),0,nullptr,nullptr),"batch ordered readback");
+    for(size_t i=0;i<gws;++i) {
+        cl_uint expected=guard;
+        for(unsigned iteration=0;iteration<=repeats;++iteration)
+            expected=expected*1664525u+1013904223u+salt+cl_uint(i/lws)+cl_uint(groups);
+        require(words[i]==expected,"batch recurrence/barrier/snapshot oracle");
+    }
+    for(size_t i=gws;i<words.size();++i) require(words[i]==guard,"batch tail canary");
+    cl_ulong previous_end=0;
+    for(unsigned i=0;i<repeats;++i) {
+        require(callbacks[i]==1,"batch one callback per public event");
+        cl_int state=99;
+        check(clGetEventInfo(events[i],CL_EVENT_COMMAND_EXECUTION_STATUS,sizeof(state),&state,nullptr),"batch event status");
+        require(state==CL_COMPLETE,"batch event complete");
+        cl_ulong times[4]{};
+        const cl_profiling_info properties[]={CL_PROFILING_COMMAND_QUEUED,CL_PROFILING_COMMAND_SUBMIT,CL_PROFILING_COMMAND_START,CL_PROFILING_COMMAND_END};
+        for(unsigned t=0;t<4;++t) check(clGetEventProfilingInfo(events[i],properties[t],sizeof(times[t]),&times[t],nullptr),"batch profiling");
+        require(times[0]<=times[1]&&times[1]<=times[2]&&times[2]<=times[3],"batch monotonic public interval");
+        require(previous_end<=times[2],"batch device intervals preserve queue order");
+        previous_end=times[3];
+        std::printf("BATCH_EVENT %s ordinal=%u event=%p start=%llu end=%llu\n",label,i+1,(void*)events[i],(unsigned long long)times[2],(unsigned long long)times[3]);
+        check(clReleaseEvent(events[i]),"batch release event");
+    }
+    check(clReleaseEvent(warmup),"batch warmup release");
+    check(clReleaseMemObject(buffer),"batch release buffer");check(clReleaseCommandQueue(queue),"batch release queue");
+    std::printf("BATCH_PASS %s groups=%zu commands=%u\n",label,groups,repeats+1);
+}
+
 int main(int argc,char** argv) {
     std::setvbuf(stdout,nullptr,_IONBF,0);
     unsigned budget=7;bool any=false,environment_only=false;
@@ -287,6 +354,9 @@ int main(int argc,char** argv) {
     cl_int status;auto ctx=clCreateContext(nullptr,1,&device,nullptr,nullptr,&status);check(status,"context");
     auto source=build(ctx,device,"-cl-std=CL3.0",false);
     empty_range(ctx,device,source);
+    run_batch(ctx,device,source,67,"within-tail");
+    run_batch(ctx,device,source,97,"exact-tail");
+    run_batch(ctx,device,source,113,"crossing-tail");
     run(ctx,device,source,1,{67,1,1},{16,1,1},"source-1d-tail");
     run(ctx,device,source,2,{17,7,1},{4,2,1},"source-2d-tails");
     run(ctx,device,source,3,{9,7,5},{4,2,2},"source-3d-tails");

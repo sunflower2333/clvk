@@ -43,6 +43,24 @@ struct cvk_ndrange_tile {
     std::array<uint32_t, 3> offset{}, gws{}, lws{};
 };
 
+// Count the entire original NDRange, including every nonuniform tail group.
+// Comparing by division avoids overflowing even a 64-bit group product. A
+// disabled budget or empty/invalid geometry retains the ordinary API path.
+inline bool cvk_ndrange_exceeds_workgroup_budget(
+    const std::array<uint32_t, 3>& gws,
+    const std::array<uint32_t, 3>& lws, uint32_t budget) {
+    if (!budget) return false;
+    for (unsigned d = 0; d < 3; ++d)
+        if (!gws[d] || !lws[d]) return false;
+    uint32_t remaining = budget;
+    for (unsigned d = 0; d < 3; ++d) {
+        const uint32_t groups = gws[d] / lws[d] + (gws[d] % lws[d] != 0);
+        if (groups > remaining) return true;
+        remaining /= groups;
+    }
+    return false;
+}
+
 // O(1) storage. Enumerate at most eight original uniform/tail regions, then
 // rectangular whole-workgroup tiles. All positions are relative to the original
 // global offset. A tail's group origin is still divided by the original LWS.

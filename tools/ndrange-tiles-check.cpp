@@ -43,6 +43,31 @@ static unsigned coverage(std::array<uint32_t, 3> gws,
 }
 
 int main() {
+    CHECK(!cvk_ndrange_exceeds_workgroup_budget({4096,96,1},{16,32,1},4096));
+    CHECK(!cvk_ndrange_exceeds_workgroup_budget({4096,96,1},{16,32,1},768));
+    CHECK(cvk_ndrange_exceeds_workgroup_budget({4096,96,1},{16,32,1},767));
+    CHECK(!cvk_ndrange_exceeds_workgroup_budget({97,1,1},{16,1,1},7));
+    CHECK(cvk_ndrange_exceeds_workgroup_budget({113,1,1},{16,1,1},7));
+    CHECK(!cvk_ndrange_exceeds_workgroup_budget({2,1,3},{4,2,4},1));
+    CHECK(!cvk_ndrange_exceeds_workgroup_budget({UINT32_MAX,1,1},{1,1,1},UINT32_MAX));
+    CHECK(cvk_ndrange_exceeds_workgroup_budget({UINT32_MAX,2,1},{1,1,1},UINT32_MAX));
+    CHECK(cvk_ndrange_exceeds_workgroup_budget({UINT32_MAX,UINT32_MAX,UINT32_MAX},{1,1,1},UINT32_MAX));
+    CHECK(!cvk_ndrange_exceeds_workgroup_budget({UINT32_MAX,UINT32_MAX,0},{1,1,1},1));
+    CHECK(!cvk_ndrange_exceeds_workgroup_budget({UINT32_MAX,UINT32_MAX,1},{1,1,0},1));
+    CHECK(!cvk_ndrange_exceeds_workgroup_budget({UINT32_MAX,UINT32_MAX,1},{1,1,1},0));
+    // An independent small-geometry oracle counts individual group origins.
+    // Every tail combination tests exact fit and both neighboring budgets.
+    for (uint32_t x=1;x<=13;++x)
+        for (uint32_t y=1;y<=9;++y)
+            for (uint32_t z=1;z<=7;++z) {
+                uint32_t groups=0;
+                for (uint32_t gz=0;gz<z;gz+=2)
+                    for (uint32_t gy=0;gy<y;gy+=3)
+                        for (uint32_t gx=0;gx<x;gx+=4) ++groups;
+                CHECK(!cvk_ndrange_exceeds_workgroup_budget({x,y,z},{4,3,2},groups));
+                CHECK(!cvk_ndrange_exceeds_workgroup_budget({x,y,z},{4,3,2},groups+1));
+                if (groups>1) CHECK(cvk_ndrange_exceeds_workgroup_budget({x,y,z},{4,3,2},groups-1));
+            }
     CHECK(coverage({64,1,1},{16,1,1},4) == 1);
     CHECK(coverage({64,1,1},{16,1,1},1) == 4);
     for (unsigned tail = 0; tail < 8; ++tail)
